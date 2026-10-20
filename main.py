@@ -561,7 +561,7 @@ async def auto_check_updates(app):
                                         seen_messages.add(msg_id)
                                         
                                         dm_text = (
-                                            "📩 *Verification Code Received!*\n\n"
+                                            "📩 *ANU OTP Received!*\n\n"
                                             f"📱 *To Number:* `{target_number}`\n"
                                             f"👤 *Sender:* `{sender}`\n"
                                             f"🔑 *Code:* `{otp_code}`"
@@ -578,7 +578,7 @@ async def auto_check_updates(app):
                                         if CHANNEL_CHAT_ID:
                                             masked_num = mask_phone_number(target_number)
                                             channel_text = (
-                                                "📢 *New SMS Received*\n\n"
+                                                "📢 *ANU OTP RECEIVED*\n\n"
                                                 f"📱 *To Number:* `{masked_num}`\n"
                                                 f"{flag_icon} *Country:* {country_name}\n"
                                                 f"👤 *Sender:* `{sender}`\n"
