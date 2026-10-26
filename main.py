@@ -142,6 +142,22 @@ def db_get_managed_ranges(provider: str) -> list:
         return []
 
 
+def db_get_all_managed_ranges() -> list:
+    """Retrieve all managed ranges across all four providers."""
+    if not supabase:
+        mk = [{**r, "provider": "mknetwork"} for r in DEFAULT_RANGES_MK]
+        zebra_r = [{**r, "provider": "zebra"} for r in DEFAULT_RANGES_ZEBRA]
+        voltx_r = [{**r, "provider": "voltx"} for r in DEFAULT_RANGES_VOLTX]
+        slv_r = [{**r, "provider": "slvirtual"} for r in DEFAULT_RANGES_SLV]
+        return mk + zebra_r + voltx_r + slv_r
+    try:
+        response = supabase.table("managed_ranges").select("*").execute()
+        return response.data if response.data else []
+    except Exception as e:
+        logging.error(f"Error fetching all ranges from Supabase: {e}")
+        return []
+
+
 def db_add_managed_range(service: str, country: str, flag: str, range_val: str, provider: str):
     if not supabase:
         return
@@ -1222,77 +1238,60 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
     data = query.data
     chat_id = query.message.chat_id
 
-    if data.startswith("provider_"):
+    if data.startswith("get_srv_"):
         await query.answer()
-        chosen_provider = data.replace("provider_", "")
-        managed_ranges = db_get_managed_ranges(chosen_provider)
+        selected_service = data.replace("get_srv_", "")
+        all_ranges = db_get_all_managed_ranges()
+        matching_ranges = [r for r in all_ranges if r["service"] == selected_service]
 
-        if not managed_ranges:
+        if not matching_ranges:
             await query.edit_message_text(
-                f"⚠ No ranges configured for `{chosen_provider.upper()}` yet. Add ranges via `/admin`.",
+                f"⚠ No ranges found for service `{selected_service}`.",
                 parse_mode="Markdown",
             )
             return
 
-        services = sorted(list(set(r["service"] for r in managed_ranges)))
-        keyboard = [
-            [InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"srv_{chosen_provider}_{srv}", style="success")]
-            for srv in services
-        ]
-        keyboard.append([InlineKeyboardButton("🔙 Back to Providers", callback_data="back_to_providers")])
-
-        await query.edit_message_text(
-            f"🛠 *Selected Provider:* `{chosen_provider.upper()}`\n\n👇 *Select a Service:*",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-        return
-
-    elif data == "back_to_providers":
-        await query.answer()
-        keyboard = [
-            [
-                InlineKeyboardButton("🟢 ANU 1", callback_data="provider_mknetwork", style="success"),
-                InlineKeyboardButton("🦓 ANU 2", callback_data="provider_zebra", style="primary"),
-            ],
-            [
-                InlineKeyboardButton("⚡ ANU 3", callback_data="provider_voltx", style="primary"),
-                InlineKeyboardButton("🌐 ANU 4", callback_data="provider_slvirtual", style="primary"),
-            ]
-        ]
-        await query.edit_message_text(
-            "🌐 *Select Provider Gateway:*",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-        return
-
-    elif data.startswith("srv_"):
-        await query.answer()
-        parts = data.replace("srv_", "").split("_", 1)
-        chosen_provider = parts[0]
-        selected_service = parts[1]
-
-        managed_ranges = db_get_managed_ranges(chosen_provider)
-        matching_ranges = [r for r in managed_ranges if r["service"] == selected_service]
-
         keyboard = [
             [
                 InlineKeyboardButton(
-                    f"{r['flag']} {r['country']} ({r['range']}) 🔵",
-                    callback_data=f"prov_{chosen_provider}_{r['range']}",
+                    f"{r['flag']} {r['country']} [{r['provider'].upper()}] ({r['range']}) 🔵",
+                    callback_data=f"prov_{r['provider']}_{r['range']}",
                     style="primary"
                 )
             ]
             for r in matching_ranges
         ]
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"provider_{chosen_provider}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
         await query.edit_message_text(
-            f"🛠 *Provider:* `{chosen_provider.upper()}` | *Service:* `{selected_service}`\n\n👇 *Select Country / Range to allocate your number:*",
+            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country / Range to allocate your number:*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
+        return
+
+    elif data == "back_to_services":
+        await query.answer()
+        all_ranges = db_get_all_managed_ranges()
+        if not all_ranges:
+            await query.edit_message_text(
+                "⚠ No ranges configured yet. Add ranges via `/admin`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        services = sorted(list(set(r["service"] for r in all_ranges)))
+        keyboard = [
+            [InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}", style="success")]
+            for srv in services
+        ]
+
+        await query.edit_message_text(
+            "📱 *Select a Service:*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
 
     elif data.startswith("prov_") or data.startswith("change_"):
         await query.answer()
@@ -1307,8 +1306,8 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         chosen_provider = parts[0]
         selected_range = parts[1]
 
-        managed_ranges = db_get_managed_ranges(chosen_provider)
-        matched_item = next((r for r in managed_ranges if r["range"] == selected_range), {})
+        all_ranges = db_get_all_managed_ranges()
+        matched_item = next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
         
         c_name, flag_icon = auto_detect_country_and_flag(
             matched_item.get("country", ""), selected_range
@@ -1572,18 +1571,21 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if "Get Number" in text:
+        all_ranges = db_get_all_managed_ranges()
+        if not all_ranges:
+            await update.message.reply_text(
+                "⚠ No ranges configured yet. Add ranges via `/admin`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        services = sorted(list(set(r["service"] for r in all_ranges)))
         keyboard = [
-            [
-                InlineKeyboardButton("🟢 ANU 1", callback_data="provider_mknetwork", style="success"),
-                InlineKeyboardButton("🦓 ANU 2", callback_data="provider_zebra", style="primary"),
-            ],
-            [
-                InlineKeyboardButton("⚡ ANU 3", callback_data="provider_voltx", style="primary"),
-                InlineKeyboardButton("🌐 ANU 4", callback_data="provider_slvirtual", style="primary"),
-            ]
+            [InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}", style="success")]
+            for srv in services
         ]
         await update.message.reply_text(
-            "🌐 *Select Provider Gateway:*",
+            "📱 *Select a Service:*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -1709,9 +1711,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("test_sms", cmd_test_sms))
 
     app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^admin_"))
-    app.add_handler(CallbackQueryHandler(user_provision_callback_handler, pattern="^(provider_|back_to_providers|srv_|prov_|change_|refresh_2fa_|copy_otp_)"))
+    app.add_handler(CallbackQueryHandler(user_provision_callback_handler, pattern="^(get_srv_|back_to_services|prov_|change_|refresh_2fa_|copy_otp_)"))
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with ANU 1, ANU 2, ANU 3, and ANU 4 API integrations...")
+    print("🤖 Bot running with merged service-first provider routing...")
     app.run_polling()
