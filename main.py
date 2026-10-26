@@ -14,6 +14,7 @@ from telegram import (
     KeyboardButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    CopyTextButton,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -1251,20 +1252,22 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             )
             return
 
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    f"{r['flag']} {r['country']} [{r['provider'].upper()}] ({r['range']}) 🔵",
-                    callback_data=f"prov_{r['provider']}_{r['range']}",
-                    style="primary"
-                )
-            ]
+        # Create buttons for matching ranges
+        country_buttons = [
+            InlineKeyboardButton(
+                f"{r['flag']} {r['country']}",
+                callback_data=f"prov_{r['provider']}_{r['range']}",
+                style="primary"
+            )
             for r in matching_ranges
         ]
+
+        # Chunk country buttons into 2 per row
+        keyboard = [country_buttons[i:i + 2] for i in range(0, len(country_buttons), 2)]
         keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
         await query.edit_message_text(
-            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country / Range to allocate your number:*",
+            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate your number:*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -1321,86 +1324,90 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
             loading_msg = await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"⏳ Requesting new number for {flag_icon} range `{selected_range}`...",
+                text=f"⏳ Requesting 3 numbers for {flag_icon} range `{selected_range}`...",
                 parse_mode="Markdown",
             )
         else:
             await query.edit_message_text(
-                f"⏳ Requesting number for {flag_icon} range `{selected_range}`..."
+                f"⏳ Requesting 3 numbers for {flag_icon} range `{selected_range}`..."
             )
 
+        allocated_results = []  # List of tuples: (allocation_key, allocated_num, api_country)
+
+        # Allocate 3 numbers per request concurrently for all providers
         if chosen_provider == "mknetwork" and mk_client:
-            res = await mk_client.get_number(selected_range)
-            meta = res.get("meta", {})
-            success_cond = (meta.get("code") == 200)
+            tasks = [mk_client.get_number(selected_range) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+                    data_dict = res.get("data", {})
+                    allocated_results.append((data_dict.get("request_id"), data_dict.get("number"), data_dict.get("country")))
+                    
         elif chosen_provider == "zebra" and zebra:
-            res = await zebra.get_number(selected_range)
-            meta = res.get("meta", {})
-            success_cond = (meta.get("code") == 0)
+            tasks = [zebra.get_number(selected_range) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
+                    rows = res.get("data", {}).get("rows", [])
+                    if rows:
+                        row = rows[0]
+                        allocated_results.append((row.get("number"), row.get("number"), row.get("country")))
+
         elif chosen_provider == "voltx" and voltx:
-            res = await voltx.get_number(selected_range)
-            meta = res.get("meta", {})
-            success_cond = (meta.get("code") == 200)
+            tasks = [voltx.get_number(selected_range) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+                    data_dict = res.get("data", {})
+                    num = data_dict.get("full_number")
+                    allocated_results.append((num, num, data_dict.get("country")))
+
         elif chosen_provider == "slvirtual" and slv_client:
-            res = await slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp"))
-            success_cond = (res.get("status") == "success")
-        else:
-            success_cond = False
-            res = {"status": "error", "message": "Client not initialized"}
+            tasks = [slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp")) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("status") == "success":
+                    data_dict = res.get("data", {})
+                    allocated_results.append((data_dict.get("rentalId"), data_dict.get("phoneNumber"), data_dict.get("country")))
 
-        if success_cond:
-            if chosen_provider == "mknetwork":
-                data_dict = res.get("data", {})
-                request_id = data_dict.get("request_id")
-                allocated_num = data_dict.get("number")
-                api_country = data_dict.get("country")
-                allocation_key = request_id
-            elif chosen_provider == "zebra":
-                row = res["data"]["rows"][0]
-                allocated_num = row.get("number")
-                api_country = row.get("country")
-                allocation_key = allocated_num
-            elif chosen_provider == "voltx":
-                data_dict = res.get("data", {})
-                allocated_num = data_dict.get("full_number")
-                api_country = data_dict.get("country")
-                allocation_key = allocated_num
-            else: # slvirtual
-                data_dict = res.get("data", {})
-                rental_id = data_dict.get("rentalId")
-                allocated_num = data_dict.get("phoneNumber")
-                api_country = data_dict.get("country")
-                allocation_key = rental_id
-
-            target_country = api_country if api_country else matched_item.get("country", c_name)
-            final_country_name, final_flag = auto_detect_country_and_flag(target_country, allocated_num)
+        if allocated_results:
+            first_entry = allocated_results[0]
+            target_country = first_entry[2] if first_entry[2] else matched_item.get("country", c_name)
+            final_country_name, final_flag = auto_detect_country_and_flag(target_country, first_entry[1])
 
             # Generate random copyable English First & Last Name
             rand_fname, rand_lname = generate_random_english_name()
 
-            active_allocations[allocation_key] = {
-                "chat_id": chat_id,
-                "country": final_country_name,
-                "flag": final_flag,
-                "number": allocated_num,
-                "provider": chosen_provider,
-            }
+            # Store allocations and build inline copy buttons for each allocated number
+            number_copy_buttons = []
+            for alloc_key, allocated_num, _ in allocated_results:
+                if alloc_key and allocated_num:
+                    active_allocations[alloc_key] = {
+                        "chat_id": chat_id,
+                        "country": final_country_name,
+                        "flag": final_flag,
+                        "number": allocated_num,
+                        "provider": chosen_provider,
+                    }
+                    number_copy_buttons.append(
+                        [InlineKeyboardButton(f"📱 {allocated_num}", copy_text=CopyTextButton(text=str(allocated_num)))]
+                    )
 
+            # Message content without the phone number printed inside the text
             msg = (
-                f"✅ **Number Allocated Successfully!**\n\n"
+                f"✅ **Numbers Allocated Successfully!**\n\n"
                 f"👤 **First Name:** `{rand_fname}`\n"
                 f"👤 **Last Name:** `{rand_lname}`\n"
-                f"📱 **Number:** `{allocated_num}`\n"
                 f"{final_flag} **Country:** {final_country_name}\n"
                 f"⏱ **Expires In:** ~15 mins"
             )
 
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}", style="danger")],
-                    [InlineKeyboardButton("📢 Open OTP Channel 🔵", url=CHANNEL_URL, style="primary")],
-                ]
-            )
+            # Assemble Inline Keyboard with multi-number copy buttons, Change Number & Open Channel
+            keyboard_layout = number_copy_buttons + [
+                [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}", style="danger")],
+                [InlineKeyboardButton("📢 Open OTP Channel 🔵", url=CHANNEL_URL, style="primary")],
+            ]
+            keyboard = InlineKeyboardMarkup(keyboard_layout)
 
             if is_change:
                 await loading_msg.edit_text(
@@ -1411,9 +1418,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                     msg, parse_mode="Markdown", reply_markup=keyboard
                 )
         else:
-            err_msg = res.get("message") or res.get("meta", {}).get("error") or "Unknown error"
-            msg = f"❌ **Failed to allocate number:**\nDetails: {err_msg}"
-            
+            msg = f"❌ **Failed to allocate numbers.**\nDetails: Service currently out of stock or range offline."
             if is_change:
                 await loading_msg.edit_text(msg, parse_mode="Markdown")
             else:
@@ -1715,5 +1720,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with merged service-first provider routing...")
+    print("🤖 Bot running with clean country-only service routing...")
     app.run_polling()
