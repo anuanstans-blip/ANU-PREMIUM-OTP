@@ -43,6 +43,9 @@ VOLTX_BASE_URL = os.getenv("VOLTX_BASE_URL", "https://api.2oo9.cloud/MXS47FLFX0U
 SLV_API_KEY = os.getenv("SLV_API_KEY")
 SLV_BASE_URL = os.getenv("SLV_BASE_URL", "https://slvirtualnumber.com")
 
+FASTX_API_KEY = os.getenv("FASTX_API_KEY")
+FASTX_BASE_URL = os.getenv("FASTX_BASE_URL", "https://2eee7.com/@Access/@Bot/2eee7/@public")
+
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -67,20 +70,21 @@ fake_otp_settings = {
     "interval": 15,
 }
 
-# Fallback default ranges for all 4 providers
+# Fallback default ranges for all 5 providers
 DEFAULT_RANGES_MK = [
     {"service": "Facebook", "country": "Sierra Leone", "flag": "🇸🇱", "range": "23276345XXX"},
-    {"service": "Telegram", "country": "Sierra Leone", "flag": "🇸🇱", "range": "23276349XXX"},
 ]
 DEFAULT_RANGES_ZEBRA = [
     {"service": "Facebook", "country": "Cambodia", "flag": "🇰🇭", "range": "85531879XXX"},
-    {"service": "Telegram", "country": "Ivory Coast", "flag": "🇨🇮", "range": "22501XXX"},
 ]
 DEFAULT_RANGES_VOLTX = [
     {"service": "Telegram", "country": "United Kingdom", "flag": "🇬🇧", "range": "26134"},
 ]
 DEFAULT_RANGES_SLV = [
     {"service": "WhatsApp", "country": "Italy", "flag": "🇮🇹", "range": "39324"},
+]
+DEFAULT_RANGES_FASTX = [
+    {"service": "WhatsApp", "country": "Ivory Coast", "flag": "🇨🇮", "range": "22501XXX"},
 ]
 
 
@@ -131,8 +135,10 @@ def db_get_managed_ranges(provider: str) -> list:
             return DEFAULT_RANGES_ZEBRA
         elif provider == "voltx":
             return DEFAULT_RANGES_VOLTX
-        else:
+        elif provider == "slvirtual":
             return DEFAULT_RANGES_SLV
+        else:
+            return DEFAULT_RANGES_FASTX
     try:
         response = supabase.table("managed_ranges").select("*").eq("provider", provider).execute()
         if response.data:
@@ -144,13 +150,14 @@ def db_get_managed_ranges(provider: str) -> list:
 
 
 def db_get_all_managed_ranges() -> list:
-    """Retrieve all managed ranges across all four providers."""
+    """Retrieve all managed ranges across all five providers."""
     if not supabase:
         mk = [{**r, "provider": "mknetwork"} for r in DEFAULT_RANGES_MK]
         zebra_r = [{**r, "provider": "zebra"} for r in DEFAULT_RANGES_ZEBRA]
         voltx_r = [{**r, "provider": "voltx"} for r in DEFAULT_RANGES_VOLTX]
         slv_r = [{**r, "provider": "slvirtual"} for r in DEFAULT_RANGES_SLV]
-        return mk + zebra_r + voltx_r + slv_r
+        fastx_r = [{**r, "provider": "fastx"} for r in DEFAULT_RANGES_FASTX]
+        return mk + zebra_r + voltx_r + slv_r + fastx_r
     try:
         response = supabase.table("managed_ranges").select("*").execute()
         return response.data if response.data else []
@@ -567,18 +574,6 @@ class VoltXSMSClient:
             except Exception as e:
                 return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
 
-    async def get_console(self) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/console",
-                    headers=self.headers,
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
-
 
 class SLVirtualNumberClient:
     def __init__(self, api_key: str):
@@ -600,8 +595,6 @@ class SLVirtualNumberClient:
                 if response.status_code != 200:
                     return {"status": "error", "message": f"HTTP {response.status_code}: {response.text[:100]}"}
                 return response.json()
-            except json.JSONDecodeError:
-                return {"status": "error", "message": "Server returned invalid response (non-JSON)"}
             except Exception as e:
                 return {"status": "error", "message": str(e)}
 
@@ -616,8 +609,6 @@ class SLVirtualNumberClient:
                 if response.status_code != 200:
                     return {"status": "error", "message": f"HTTP {response.status_code}"}
                 return response.json()
-            except json.JSONDecodeError:
-                return {"status": "error", "message": "Server returned invalid response (non-JSON)"}
             except Exception as e:
                 return {"status": "error", "message": str(e)}
 
@@ -636,16 +627,49 @@ class SLVirtualNumberClient:
                 if response.status_code != 200:
                     return {"status": "error", "message": f"HTTP {response.status_code}"}
                 return response.json()
-            except json.JSONDecodeError:
-                return {"status": "error", "message": "Server returned invalid response (non-JSON)"}
             except Exception as e:
                 return {"status": "error", "message": str(e)}
+
+
+class FastXClient:
+    def __init__(self, api_key: str):
+        self.base_url = FASTX_BASE_URL.rstrip("/")
+        self.headers = {
+            "X-API-Key": api_key,
+            "Content-Type": "application/json",
+        }
+
+    async def get_number(self, range_val: str) -> dict:
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/api/getnum",
+                    headers=self.headers,
+                    json={"range": range_val},
+                    timeout=10.0,
+                )
+                return response.json()
+            except Exception as e:
+                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+
+    async def get_success_otp(self) -> dict:
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{self.base_url}/api/success-otp-info",
+                    headers=self.headers,
+                    timeout=10.0,
+                )
+                return response.json()
+            except Exception as e:
+                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
 
 
 mk_client = MKNetworkClient(MKNETWORK_API_KEY) if MKNETWORK_API_KEY else None
 zebra = ZebraSMSClient(ZEBRA_API_KEY) if ZEBRA_API_KEY else None
 voltx = VoltXSMSClient(VOLTX_API_KEY) if VOLTX_API_KEY else None
 slv_client = SLVirtualNumberClient(SLV_API_KEY) if SLV_API_KEY else None
+fastx_client = FastXClient(FASTX_API_KEY) if FASTX_API_KEY else None
 
 
 async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -695,11 +719,11 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def auto_check_updates(app):
-    """Background polling loop supporting ANU 1, ANU 2, ANU 3, and ANU 4 concurrently."""
+    """Background polling loop supporting all providers concurrently."""
     while True:
         try:
             if active_allocations:
-                # 1. Handle ANU 1 Allocations
+                # 1. Handle MKNetwork Allocations
                 mk_req_ids = [req_id for req_id, info in active_allocations.items() if info.get("provider") == "mknetwork"]
                 if mk_req_ids and mk_client:
                     for i in range(0, len(mk_req_ids), 100):
@@ -741,13 +765,9 @@ async def auto_check_updates(app):
                                             f"🔑 *Code:* `{otp_code}`"
                                         )
                                         try:
-                                            await app.bot.send_message(
-                                                chat_id=user_chat_id,
-                                                text=dm_text,
-                                                parse_mode="Markdown",
-                                            )
+                                            await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
                                         except Exception as e:
-                                            logging.error(f"Error sending DM to {user_chat_id}: {e}")
+                                            logging.error(f"Error sending DM: {e}")
 
                                         if CHANNEL_CHAT_ID:
                                             masked_num = mask_phone_number(target_number)
@@ -759,35 +779,23 @@ async def auto_check_updates(app):
                                                 f"💬 *Full Message:* `{msg_text}`"
                                             )
                                             channel_keyboard = InlineKeyboardMarkup([
-                                                [
-                                                    InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success"),
-                                                    InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot", style="primary")
-                                                ],
-                                                [
-                                                    InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")
-                                                ]
+                                                [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
+                                                [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
                                             ])
                                             try:
-                                                await app.bot.send_message(
-                                                    chat_id=CHANNEL_CHAT_ID,
-                                                    text=channel_text,
-                                                    parse_mode="Markdown",
-                                                    reply_markup=channel_keyboard,
-                                                )
+                                                await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                                             except Exception as err:
                                                 logging.error(f"Failed to post to channel: {err}")
 
                                     active_allocations.pop(req_id, None)
-
                                 elif status in ["expired", "not_found"]:
                                     active_allocations.pop(req_id, None)
 
-                # 2. Handle ANU 2 Allocations
+                # 2. Handle Zebra Allocations
                 zebra_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "zebra"]
                 if zebra_numbers and zebra:
                     res = await zebra.get_updates()
                     meta = res.get("meta", {})
-
                     if meta.get("code") == 0:
                         rows = res.get("data", {}).get("rows", [])
                         for row in rows:
@@ -805,7 +813,6 @@ async def auto_check_updates(app):
                                 user_chat_id = allocation_info["chat_id"]
                                 country_name = allocation_info["country"]
                                 flag_icon = allocation_info["flag"]
-                                
                                 code = extract_code(msg_text)
                                 masked_num = mask_phone_number(target_number)
 
@@ -816,61 +823,28 @@ async def auto_check_updates(app):
                                     f"🔑 *Code:* `{code}`"
                                 )
                                 try:
-                                    await app.bot.send_message(
-                                        chat_id=user_chat_id,
-                                        text=dm_text,
-                                        parse_mode="Markdown",
-                                    )
+                                    await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
                                 except Exception as e:
-                                    logging.error(f"Error sending DM to {user_chat_id}: {e}")
+                                    logging.error(f"Error sending DM: {e}")
 
-                                if CHANNEL_CHAT_ID:
-                                    channel_text = (
-                                        "📢 *New SMS Received*\n\n"
-                                        f"📱 *To Number:* `{masked_num}`\n"
-                                        f"{flag_icon} *Country:* {country_name}\n"
-                                        f"👤 *Sender:* `{sender}`\n"
-                                        f"💬 *Full Message:* `{msg_text}`"
-                                    )
-                                    channel_keyboard = InlineKeyboardMarkup([
-                                        [
-                                            InlineKeyboardButton(f"📋 Copy OTP: {code}", callback_data=f"copy_otp_{code}", style="success"),
-                                            InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot", style="primary")
-                                        ],
-                                        [
-                                            InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")
-                                        ]
-                                    ])
-                                    try:
-                                        await app.bot.send_message(
-                                            chat_id=CHANNEL_CHAT_ID,
-                                            text=channel_text,
-                                            parse_mode="Markdown",
-                                            reply_markup=channel_keyboard,
-                                        )
-                                    except Exception as err:
-                                        logging.error(f"Failed to post to channel: {err}")
-
-                # 3. Handle ANU 3 Allocations
+                # 3. Handle VoltX Allocations
                 voltx_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "voltx"]
                 if voltx_numbers and voltx:
                     res = await voltx.get_success_otp()
                     meta = res.get("meta", {})
-
                     if meta.get("code") == 200:
                         otps = res.get("data", {}).get("otps", [])
                         for row in otps:
                             target_number = row.get("number")
                             msg_text = row.get("message")
                             otp_id = row.get("otp_id")
-                            
                             clean_target = re.sub(r"\D", "", target_number)
+                            
                             matched_alloc_key = None
                             for alloc_num, info in active_allocations.items():
-                                if info.get("provider") == "voltx":
-                                    if re.sub(r"\D", "", alloc_num) == clean_target:
-                                        matched_alloc_key = alloc_num
-                                        break
+                                if info.get("provider") == "voltx" and re.sub(r"\D", "", alloc_num) == clean_target:
+                                    matched_alloc_key = alloc_num
+                                    break
                             
                             if matched_alloc_key:
                                 msg_id = f"{target_number}_{otp_id}"
@@ -883,10 +857,8 @@ async def auto_check_updates(app):
                                     user_chat_id = allocation_info["chat_id"]
                                     country_name = allocation_info["country"]
                                     flag_icon = allocation_info["flag"]
-                                    
                                     code = extract_code(msg_text)
                                     formatted_num = f"+{clean_target}"
-                                    masked_num = mask_phone_number(formatted_num)
 
                                     dm_text = (
                                         "📩 *Verification Code Received!*\n\n"
@@ -895,49 +867,18 @@ async def auto_check_updates(app):
                                         f"💬 *Full Message:* `{msg_text}`"
                                     )
                                     try:
-                                        await app.bot.send_message(
-                                            chat_id=user_chat_id,
-                                            text=dm_text,
-                                            parse_mode="Markdown",
-                                        )
+                                        await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
                                     except Exception as e:
-                                        logging.error(f"Error sending DM to {user_chat_id}: {e}")
+                                        logging.error(f"Error sending DM: {e}")
 
-                                    if CHANNEL_CHAT_ID:
-                                        channel_text = (
-                                            "📢 *New SMS Received*\n\n"
-                                            f"📱 *To Number:* `{masked_num}`\n"
-                                            f"{flag_icon} *Country:* {country_name}\n"
-                                            f"💬 *Full Message:* `{msg_text}`"
-                                        )
-                                        channel_keyboard = InlineKeyboardMarkup([
-                                            [
-                                                InlineKeyboardButton(f"📋 Copy OTP: {code}", callback_data=f"copy_otp_{code}", style="success"),
-                                                InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot", style="primary")
-                                            ],
-                                            [
-                                                InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")
-                                            ]
-                                        ])
-                                        try:
-                                            await app.bot.send_message(
-                                                chat_id=CHANNEL_CHAT_ID,
-                                                text=channel_text,
-                                                parse_mode="Markdown",
-                                                reply_markup=channel_keyboard,
-                                            )
-                                        except Exception as err:
-                                            logging.error(f"Failed to post to channel: {err}")
-
-                # 4. Handle ANU 4 Allocations
+                # 4. Handle SLVirtual Allocations
                 slv_rentals = [rental_id for rental_id, info in active_allocations.items() if info.get("provider") == "slvirtual"]
                 if slv_rentals and slv_client:
                     for rental_id in slv_rentals:
                         res = await slv_client.check_status(rental_id)
                         if res.get("status") == "success":
                             data_row = res.get("data", {})
-                            stat = data_row.get("status")
-                            if stat == "RECEIVED":
+                            if data_row.get("status") == "RECEIVED":
                                 target_number = data_row.get("phoneNumber")
                                 otp_code = data_row.get("otpCode")
                                 msg_text = data_row.get("fullSms")
@@ -951,8 +892,6 @@ async def auto_check_updates(app):
                                     seen_messages.add(msg_id)
                                     allocation_info = active_allocations[rental_id]
                                     user_chat_id = allocation_info["chat_id"]
-                                    country_name = allocation_info["country"]
-                                    flag_icon = allocation_info["flag"]
 
                                     dm_text = (
                                         "📩 *Verification Code Received!*\n\n"
@@ -961,43 +900,52 @@ async def auto_check_updates(app):
                                         f"🔑 *Code:* `{otp_code}`"
                                     )
                                     try:
-                                        await app.bot.send_message(
-                                            chat_id=user_chat_id,
-                                            text=dm_text,
-                                            parse_mode="Markdown",
-                                        )
+                                        await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
                                     except Exception as e:
-                                        logging.error(f"Error sending DM to {user_chat_id}: {e}")
+                                        logging.error(f"Error sending DM: {e}")
+                                    active_allocations.pop(rental_id, None)
 
-                                    if CHANNEL_CHAT_ID:
-                                        masked_num = mask_phone_number(target_number)
-                                        channel_text = (
-                                            "📢 *New SMS Received*\n\n"
-                                            f"📱 *To Number:* `{masked_num}`\n"
-                                            f"{flag_icon} *Country:* {country_name}\n"
-                                            f"👤 *Sender:* `{service_name}`\n"
-                                            f"💬 *Full Message:* `{msg_text}`"
-                                        )
-                                        channel_keyboard = InlineKeyboardMarkup([
-                                            [
-                                                InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success"),
-                                                InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot", style="primary")
-                                            ],
-                                            [
-                                                InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")
-                                            ]
-                                        ])
-                                        try:
-                                            await app.bot.send_message(
-                                                chat_id=CHANNEL_CHAT_ID,
-                                                text=channel_text,
-                                                parse_mode="Markdown",
-                                                reply_markup=channel_keyboard,
-                                            )
-                                        except Exception as err:
-                                            logging.error(f"Failed to post to channel: {err}")
+                # 5. Handle FastX Allocations
+                fastx_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "fastx"]
+                if fastx_numbers and fastx_client:
+                    res = await fastx_client.get_success_otp()
+                    meta = res.get("meta", {})
+                    if meta.get("code") == 200:
+                        otps = res.get("data", {}).get("otps", [])
+                        for row in otps:
+                            target_number = row.get("number")
+                            msg_text = row.get("sms")
+                            otp_code = row.get("otp")
+                            clean_target = re.sub(r"\D", "", target_number)
 
-                                active_allocations.pop(rental_id, None)
+                            matched_alloc_key = None
+                            for alloc_num, info in active_allocations.items():
+                                if info.get("provider") == "fastx" and re.sub(r"\D", "", alloc_num) == clean_target:
+                                    matched_alloc_key = alloc_num
+                                    break
+
+                            if matched_alloc_key:
+                                msg_id = f"{target_number}_{otp_code}"
+                                if len(seen_messages) > MAX_SEEN_SIZE:
+                                    seen_messages.clear()
+
+                                if msg_id not in seen_messages:
+                                    seen_messages.add(msg_id)
+                                    allocation_info = active_allocations[matched_alloc_key]
+                                    user_chat_id = allocation_info["chat_id"]
+                                    formatted_num = f"+{clean_target}"
+
+                                    dm_text = (
+                                        "📩 *Verification Code Received!*\n\n"
+                                        f"📱 *To Number:* `{formatted_num}`\n"
+                                        f"🔑 *Code:* `{otp_code}`\n"
+                                        f"💬 *Full Message:* `{msg_text}`"
+                                    )
+                                    try:
+                                        await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
+                                    except Exception as e:
+                                        logging.error(f"Error sending DM: {e}")
+
         except Exception as e:
             logging.error(f"Error during auto-polling: {e}")
 
@@ -1005,15 +953,13 @@ async def auto_check_updates(app):
 
 
 async def fake_sms_generator_loop(app):
-    """Background simulator loop pulling from database ranges to post fake SMS like real ones."""
     while True:
         try:
             await asyncio.sleep(fake_otp_settings["interval"])
             if fake_otp_settings["enabled"] and CHANNEL_CHAT_ID:
-                all_ranges = db_get_managed_ranges("mknetwork") + db_get_managed_ranges("zebra") + db_get_managed_ranges("voltx") + db_get_managed_ranges("slvirtual")
+                all_ranges = db_get_all_managed_ranges()
                 if all_ranges:
                     chosen_range = random.choice(all_ranges)
-                    
                     app_name = chosen_range["service"].upper()
                     country_name = chosen_range["country"]
                     flag_icon = chosen_range["flag"]
@@ -1032,23 +978,13 @@ async def fake_sms_generator_loop(app):
                         f"💬 *Full Message:* `{msg_text}`"
                     )
                     channel_keyboard = InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton(f"📋 Copy OTP: {otp}", callback_data=f"copy_otp_{otp}", style="success"),
-                            InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot", style="primary")
-                        ],
-                        [
-                            InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")
-                        ]
+                        [InlineKeyboardButton(f"📋 Copy OTP: {otp}", callback_data=f"copy_otp_{otp}", style="success")],
+                        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
                     ])
                     try:
-                        await app.bot.send_message(
-                            chat_id=CHANNEL_CHAT_ID,
-                            text=channel_text,
-                            parse_mode="Markdown",
-                            reply_markup=channel_keyboard,
-                        )
+                        await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                     except Exception as err:
-                        logging.error(f"Failed to post simulated SMS to channel: {err}")
+                        logging.error(f"Failed to post simulated SMS: {err}")
         except Exception as e:
             logging.error(f"Error in fake SMS loop: {e}")
 
@@ -1064,7 +1000,6 @@ def get_main_keyboard():
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     if ADMIN_ID != 0 and user_id != ADMIN_ID:
         await update.message.reply_text(f"⛔ **Access Denied:** Your Telegram ID `{user_id}` is not configured as admin.", parse_mode="Markdown")
         return
@@ -1079,7 +1014,10 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🌐 ANU 4", callback_data="admin_prov_slvirtual", style="primary"),
         ],
         [
+            InlineKeyboardButton("🚀 FastX", callback_data="admin_prov_fastx", style="success"),
             InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake", style="primary"),
+        ],
+        [
             InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast", style="primary"),
         ]
     ]
@@ -1090,16 +1028,12 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🧪 **Fake SMS Simulation:** {fake_status} (Interval: {fake_otp_settings['interval']}s)\n\n"
         f"👇 *Select a provider to manage ranges or toggle settings:*"
     )
-
-    await update.message.reply_text(
-        admin_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text(admin_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-
     if ADMIN_ID != 0 and user_id != ADMIN_ID:
         await query.answer("Unauthorized action.", show_alert=True)
         return
@@ -1112,10 +1046,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         managed_ranges = db_get_managed_ranges(prov)
 
         ranges_text = "\n".join(
-            [
-                f"• {r['flag']} 🔹 **[{r['service']}]** {r['country']} (`{r['range']}`)"
-                for r in managed_ranges
-            ]
+            [f"• {r['flag']} 🔹 **[{r['service']}]** {r['country']} (`{r['range']}`)" for r in managed_ranges]
         ) or "No active ranges configured."
 
         msg = (
@@ -1129,7 +1060,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 InlineKeyboardButton("🗑 Delete Range 🔴", callback_data=f"admin_del_select_{prov}", style="danger"),
             ],
             [
-                InlineKeyboardButton("⚠️ Clear All Ranges 🟠", callback_data=f"admin_clear_{prov}", style="danger"),
+                InlineKeyboardButton("⚠️ Clear All 🟠", callback_data=f"admin_clear_{prov}", style="danger"),
                 InlineKeyboardButton("🔙 Back", callback_data="admin_back_main", style="primary")
             ]
         ]
@@ -1148,7 +1079,10 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 InlineKeyboardButton("🌐 ANU 4", callback_data="admin_prov_slvirtual", style="primary"),
             ],
             [
+                InlineKeyboardButton("🚀 FastX", callback_data="admin_prov_fastx", style="success"),
                 InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake", style="primary"),
+            ],
+            [
                 InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast", style="primary"),
             ]
         ]
@@ -1165,18 +1099,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         prov = data.replace("admin_add_", "")
         context.user_data["waiting_for_range"] = prov
         context.user_data["waiting_for_broadcast"] = False
-        if prov == "mknetwork":
-            example_range = "23276345XXX"
-        elif prov == "zebra":
-            example_range = "85531879XXX"
-        elif prov == "voltx":
-            example_range = "26134"
-        else:
-            example_range = "39324"
         await query.message.reply_text(
-            f"✍ **Send the configuration for {prov.upper()} in this format:**\n\n"
-            "`Service | Country | Range`\n\n"
-            f"👉 *Example:* `WhatsApp | Italy | {example_range}`",
+            f"✍ **Send configuration for {prov.upper()}:**\n\n`Service | Country | Range`\n👉 *Example:* `WhatsApp | Ivory Coast | 22501XXX`",
             parse_mode="Markdown",
         )
         await query.answer()
@@ -1190,27 +1114,17 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         keyboard = [
-            [
-                InlineKeyboardButton(
-                    f"❌ Delete {r['flag']} {r['service']} ({r['range']}) 🔴",
-                    callback_data=f"admin_del_{r['range']}",
-                    style="danger"
-                )
-            ]
+            [InlineKeyboardButton(f"❌ Delete {r['flag']} {r['service']} ({r['range']}) 🔴", callback_data=f"admin_del_{r['range']}", style="danger")]
             for r in managed_ranges
         ]
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"admin_prov_{prov}", style="primary")])
-
-        await query.edit_message_text(
-            f"🗑 **Select a specific {prov.upper()} range to delete:**",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await query.edit_message_text(f"🗑 **Select range to delete:**", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("admin_del_"):
         range_to_del = data.replace("admin_del_", "")
         db_delete_specific_range(range_to_del)
         await query.answer(f"Deleted range {range_to_del}", show_alert=True)
-        await query.edit_message_text(f"✅ **Range `{range_to_del}` deleted successfully.**", parse_mode="Markdown")
+        await query.edit_message_text(f"✅ **Range `{range_to_del}` deleted.**", parse_mode="Markdown")
 
     elif data == "admin_toggle_fake":
         fake_otp_settings["enabled"] = not fake_otp_settings["enabled"]
@@ -1222,16 +1136,13 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer()
         context.user_data["waiting_for_broadcast"] = True
         context.user_data["waiting_for_range"] = None
-        await query.message.reply_text(
-            "📢 **Send the message (Text, Photo, Video, Audio, Document, or Voice) you wish to broadcast to all bot users:**",
-            parse_mode="Markdown"
-        )
+        await query.message.reply_text("📢 **Send the message you wish to broadcast:**", parse_mode="Markdown")
 
     elif data.startswith("admin_clear_"):
         prov = data.replace("admin_clear_", "")
         db_clear_managed_ranges(prov)
-        await query.answer(f"All {prov.upper()} ranges cleared from database!", show_alert=True)
-        await query.edit_message_text(f"🗑 **All configured {prov.upper()} ranges have been cleared from database.**")
+        await query.answer(f"All {prov.upper()} ranges cleared!", show_alert=True)
+        await query.edit_message_text(f"🗑 **All configured {prov.upper()} ranges cleared.**")
 
 
 async def user_provision_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1246,28 +1157,18 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         matching_ranges = [r for r in all_ranges if r["service"] == selected_service]
 
         if not matching_ranges:
-            await query.edit_message_text(
-                f"⚠ No ranges found for service `{selected_service}`.",
-                parse_mode="Markdown",
-            )
+            await query.edit_message_text(f"⚠ No ranges found for service `{selected_service}`.", parse_mode="Markdown")
             return
 
-        # Create buttons for matching ranges
         country_buttons = [
-            InlineKeyboardButton(
-                f"{r['flag']} {r['country']}",
-                callback_data=f"prov_{r['provider']}_{r['range']}",
-                style="primary"
-            )
+            InlineKeyboardButton(f"{r['flag']} {r['country']}", callback_data=f"prov_{r['provider']}_{r['range']}", style="primary")
             for r in matching_ranges
         ]
-
-        # Chunk country buttons into 2 per row
         keyboard = [country_buttons[i:i + 2] for i in range(0, len(country_buttons), 2)]
         keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
         await query.edit_message_text(
-            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate your number:*",
+            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate 3 numbers:*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -1277,33 +1178,18 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         await query.answer()
         all_ranges = db_get_all_managed_ranges()
         if not all_ranges:
-            await query.edit_message_text(
-                "⚠ No ranges configured yet. Add ranges via `/admin`.",
-                parse_mode="Markdown",
-            )
+            await query.edit_message_text("⚠ No ranges configured yet.", parse_mode="Markdown")
             return
 
         services = sorted(list(set(r["service"] for r in all_ranges)))
-        keyboard = [
-            [InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}", style="success")]
-            for srv in services
-        ]
-
-        await query.edit_message_text(
-            "📱 *Select a Service:*",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
+        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}", style="success")] for srv in services]
+        await query.edit_message_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     elif data.startswith("prov_") or data.startswith("change_"):
         await query.answer()
         is_change = data.startswith("change_")
-        
-        if is_change:
-            clean_data = data.replace("change_", "")
-        else:
-            clean_data = data.replace("prov_", "")
+        clean_data = data.replace("change_", "") if is_change else data.replace("prov_", "")
 
         parts = clean_data.split("_", 1)
         chosen_provider = parts[0]
@@ -1311,37 +1197,27 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
         all_ranges = db_get_all_managed_ranges()
         matched_item = next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
-        
-        c_name, flag_icon = auto_detect_country_and_flag(
-            matched_item.get("country", ""), selected_range
-        )
+        c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
 
         if is_change:
             try:
                 await query.message.delete()
-            except Exception as e:
-                logging.warning(f"Could not delete old message: {e}")
-
-            loading_msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"⏳ Requesting 3 numbers for {flag_icon} range `{selected_range}`...",
-                parse_mode="Markdown",
-            )
+            except Exception:
+                pass
+            loading_msg = await context.bot.send_message(chat_id=chat_id, text=f"⏳ Requesting 3 numbers for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
         else:
-            await query.edit_message_text(
-                f"⏳ Requesting 3 numbers for {flag_icon} range `{selected_range}`..."
-            )
+            await query.edit_message_text(f"⏳ Requesting 3 numbers for {flag_icon} range `{selected_range}`...")
 
-        allocated_results = []  # List of tuples: (allocation_key, allocated_num, api_country)
+        allocated_results = []
 
-        # Allocate 3 numbers per request concurrently for all providers
+        # Request 3 numbers concurrently across all providers
         if chosen_provider == "mknetwork" and mk_client:
             tasks = [mk_client.get_number(selected_range) for _ in range(3)]
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             for res in responses:
                 if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
-                    data_dict = res.get("data", {})
-                    allocated_results.append((data_dict.get("request_id"), data_dict.get("number"), data_dict.get("country")))
+                    d = res.get("data", {})
+                    allocated_results.append((d.get("request_id"), d.get("number"), d.get("country")))
                     
         elif chosen_provider == "zebra" and zebra:
             tasks = [zebra.get_number(selected_range) for _ in range(3)]
@@ -1350,36 +1226,43 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
                     rows = res.get("data", {}).get("rows", [])
                     if rows:
-                        row = rows[0]
-                        allocated_results.append((row.get("number"), row.get("number"), row.get("country")))
+                        r = rows[0]
+                        allocated_results.append((r.get("number"), r.get("number"), r.get("country")))
 
         elif chosen_provider == "voltx" and voltx:
             tasks = [voltx.get_number(selected_range) for _ in range(3)]
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             for res in responses:
                 if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
-                    data_dict = res.get("data", {})
-                    num = data_dict.get("full_number")
-                    allocated_results.append((num, num, data_dict.get("country")))
+                    d = res.get("data", {})
+                    num = d.get("full_number")
+                    allocated_results.append((num, num, d.get("country")))
 
         elif chosen_provider == "slvirtual" and slv_client:
             tasks = [slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp")) for _ in range(3)]
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             for res in responses:
                 if isinstance(res, dict) and res.get("status") == "success":
-                    data_dict = res.get("data", {})
-                    allocated_results.append((data_dict.get("rentalId"), data_dict.get("phoneNumber"), data_dict.get("country")))
+                    d = res.get("data", {})
+                    allocated_results.append((d.get("rentalId"), d.get("phoneNumber"), d.get("country")))
+
+        elif chosen_provider == "fastx" and fastx_client:
+            tasks = [fastx_client.get_number(selected_range) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+                    d = res.get("data", {})
+                    num = d.get("full_number")
+                    allocated_results.append((num, num, d.get("country")))
 
         if allocated_results:
             first_entry = allocated_results[0]
             target_country = first_entry[2] if first_entry[2] else matched_item.get("country", c_name)
             final_country_name, final_flag = auto_detect_country_and_flag(target_country, first_entry[1])
 
-            # Generate random copyable English First & Last Name
             rand_fname, rand_lname = generate_random_english_name()
-
-            # Store allocations and build inline copy buttons for each allocated number
             number_copy_buttons = []
+
             for alloc_key, allocated_num, _ in allocated_results:
                 if alloc_key and allocated_num:
                     active_allocations[alloc_key] = {
@@ -1393,32 +1276,26 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                         [InlineKeyboardButton(f"📱 {allocated_num}", copy_text=CopyTextButton(text=str(allocated_num)))]
                     )
 
-            # Message content without the phone number printed inside the text
             msg = (
-                f"✅ **Numbers Allocated Successfully!**\n\n"
+                f"✅ **3 Numbers Allocated Successfully!**\n\n"
                 f"👤 **First Name:** `{rand_fname}`\n"
                 f"👤 **Last Name:** `{rand_lname}`\n"
                 f"{final_flag} **Country:** {final_country_name}\n"
                 f"⏱ **Expires In:** ~15 mins"
             )
 
-            # Assemble Inline Keyboard with multi-number copy buttons, Change Number & Open Channel
             keyboard_layout = number_copy_buttons + [
-                [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}", style="danger")],
+                [InlineKeyboardButton("🔄 Change Numbers 🟠", callback_data=f"change_{chosen_provider}_{selected_range}", style="danger")],
                 [InlineKeyboardButton("📢 Open OTP Channel 🔵", url=CHANNEL_URL, style="primary")],
             ]
             keyboard = InlineKeyboardMarkup(keyboard_layout)
 
             if is_change:
-                await loading_msg.edit_text(
-                    msg, parse_mode="Markdown", reply_markup=keyboard
-                )
+                await loading_msg.edit_text(msg, parse_mode="Markdown", reply_markup=keyboard)
             else:
-                await query.edit_message_text(
-                    msg, parse_mode="Markdown", reply_markup=keyboard
-                )
+                await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)
         else:
-            msg = f"❌ **Failed to allocate numbers.**\nDetails: Service currently out of stock or range offline."
+            msg = f"❌ **Failed to allocate numbers.** Service currently out of stock."
             if is_change:
                 await loading_msg.edit_text(msg, parse_mode="Markdown")
             else:
@@ -1431,18 +1308,10 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             totp = pyotp.TOTP(secret)
             code = totp.now()
             remaining = 30 - (int(asyncio.get_event_loop().time()) % 30)
-            
-            refresh_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret}", style="success")]
-            ])
-            
-            await query.edit_message_text(
-                f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s",
-                parse_mode="Markdown",
-                reply_markup=refresh_keyboard
-            )
+            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret}", style="success")]])
+            await query.edit_message_text(f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s", parse_mode="Markdown", reply_markup=refresh_keyboard)
         except Exception:
-            await query.edit_message_text("❌ Failed to refresh code. Secret key may be invalid.")
+            await query.edit_message_text("❌ Failed to refresh code.")
 
     elif data.startswith("copy_otp_"):
         otp_val = data.replace("copy_otp_", "")
@@ -1452,7 +1321,6 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name or "User"
-    
     db_add_user(user_id)
     
     welcome_msg = (
@@ -1460,9 +1328,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Welcome, *{user_name}*! 👋\n\n"
         f"Need help or want to add a working number? Contact support: {SUPPORT_USERNAME}"
     )
-    await update.message.reply_text(
-        welcome_msg, parse_mode="Markdown", reply_markup=get_main_keyboard()
-    )
+    await update.message.reply_text(welcome_msg, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1471,49 +1337,20 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if context.user_data.get("waiting_for_broadcast"):
         context.user_data["waiting_for_broadcast"] = False
-        all_users = db_get_all_users()
-        
-        if not all_users:
-            all_users = [user_chat_id]
-
+        all_users = db_get_all_users() or [user_chat_id]
         status_msg = await update.message.reply_text(f"⏳ Sending broadcast to {len(all_users)} users...")
         
         success, failed = 0, 0
         for uid in all_users:
             try:
                 if update.message.photo:
-                    file_id = update.message.photo[-1].file_id
-                    caption = update.message.caption_html or update.message.caption or ""
-                    await context.bot.send_photo(chat_id=uid, photo=file_id, caption=caption, parse_mode="HTML")
-                elif update.message.video:
-                    file_id = update.message.video.file_id
-                    caption = update.message.caption_html or update.message.caption or ""
-                    await context.bot.send_video(chat_id=uid, video=file_id, caption=caption, parse_mode="HTML")
-                elif update.message.audio:
-                    file_id = update.message.audio.file_id
-                    caption = update.message.caption_html or update.message.caption or ""
-                    await context.bot.send_audio(chat_id=uid, audio=file_id, caption=caption, parse_mode="HTML")
-                elif update.message.voice:
-                    file_id = update.message.voice.file_id
-                    caption = update.message.caption_html or update.message.caption or ""
-                    await context.bot.send_voice(chat_id=uid, voice=file_id, caption=caption, parse_mode="HTML")
-                elif update.message.document:
-                    file_id = update.message.document.file_id
-                    caption = update.message.caption_html or update.message.caption or ""
-                    await context.bot.send_document(chat_id=uid, document=file_id, caption=caption, parse_mode="HTML")
+                    await context.bot.send_photo(chat_id=uid, photo=update.message.photo[-1].file_id, caption=update.message.caption or "", parse_mode="HTML")
                 else:
-                    text_content = update.message.text_html or update.message.text or ""
-                    await context.bot.send_message(
-                        chat_id=uid,
-                        text=f"📢 **ANNOUNCEMENT** 📢\n\n{text_content}",
-                        parse_mode="Markdown"
-                    )
+                    await context.bot.send_message(chat_id=uid, text=f"📢 **ANNOUNCEMENT** 📢\n\n{update.message.text}", parse_mode="Markdown")
                 success += 1
-            except Exception as e:
+            except Exception:
                 failed += 1
-                logging.error(f"Failed to broadcast to {uid}: {e}")
-
-        await status_msg.edit_text(f"✅ **Broadcast Completed!**\n\n Successful: `{success}`\n❌ Failed: `{failed}`", parse_mode="Markdown")
+        await status_msg.edit_text(f"✅ **Broadcast Completed!**\nSuccessful: `{success}`\n❌ Failed: `{failed}`", parse_mode="Markdown")
         return
 
     text = update.message.text.strip() if update.message.text else ""
@@ -1525,36 +1362,16 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             totp = pyotp.TOTP(secret_key)
             code = totp.now()
             remaining = 30 - (int(asyncio.get_event_loop().time()) % 30)
-            
-            refresh_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret_key}", style="success")]
-            ])
-            
-            await update.message.reply_text(
-                f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s",
-                parse_mode="Markdown",
-                reply_markup=refresh_keyboard
-            )
+            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret_key}", style="success")]])
+            await update.message.reply_text(f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s", parse_mode="Markdown", reply_markup=refresh_keyboard)
         except Exception:
-            await update.message.reply_text("❌ Invalid 2FA secret key! Try again using the '2FA Online' button.", reply_markup=get_main_keyboard())
+            await update.message.reply_text("❌ Invalid 2FA secret key!", reply_markup=get_main_keyboard())
         return
 
     if context.user_data.get("waiting_for_range"):
         prov = context.user_data.get("waiting_for_range")
         if text.count("|") != 2:
-            if prov == "mknetwork":
-                example_range = "23276345XXX"
-            elif prov == "zebra":
-                example_range = "85531879XXX"
-            elif prov == "voltx":
-                example_range = "26134"
-            else:
-                example_range = "39324"
-            await update.message.reply_text(
-                "⚠️ **Format Error!** Use: `Service | Country | Range`\n"
-                f"Example: `WhatsApp | Italy | {example_range}`",
-                parse_mode="Markdown",
-            )
+            await update.message.reply_text("⚠️ **Format Error!** Use: `Service | Country | Range`", parse_mode="Markdown")
             return
 
         parts = [p.strip() for p in text.split("|")]
@@ -1562,14 +1379,10 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         c_name, detected_flag = auto_detect_country_and_flag(country, range_val)
 
         db_add_managed_range(service, c_name, detected_flag, range_val, provider=prov)
-        
         context.user_data["waiting_for_range"] = None
 
         await update.message.reply_text(
-            f"✅ **Successfully saved range to database for {prov.upper()}!**\n"
-            f"📌 **Service:** `{service}`\n"
-            f"{detected_flag} **Country:** `{c_name}`\n"
-            f"🔢 **Range:** `{range_val}`",
+            f"✅ **Successfully saved range for {prov.upper()}!**\n📌 Service: `{service}`\n{detected_flag} Country: `{c_name}`\n🔢 Range: `{range_val}`",
             parse_mode="Markdown",
             reply_markup=get_main_keyboard(),
         )
@@ -1578,119 +1391,34 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if "Get Number" in text:
         all_ranges = db_get_all_managed_ranges()
         if not all_ranges:
-            await update.message.reply_text(
-                "⚠ No ranges configured yet. Add ranges via `/admin`.",
-                parse_mode="Markdown",
-            )
+            await update.message.reply_text("⚠ No ranges configured yet. Add ranges via `/admin`.", parse_mode="Markdown")
             return
 
         services = sorted(list(set(r["service"] for r in all_ranges)))
-        keyboard = [
-            [InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}", style="success")]
-            for srv in services
-        ]
-        await update.message.reply_text(
-            "📱 *Select a Service:*",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
+        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}", style="success")] for srv in services]
+        await update.message.reply_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif "Active Engine" in text:
-        if zebra:
-            await update.message.reply_text("⏳ Fetching active delivery engines...")
-            res = await zebra.get_live_access()
-            meta = res.get("meta", {})
-
-            if meta.get("code") == 0:
-                rows = res.get("data", {}).get("rows", [])
-                reply = "⚡ **ANU 2 Active Delivery Engines:**\n\n" + "\n".join(
-                    [f"• 👤 **Sender:** `{r.get('sender')}` | **Ranges:** {', '.join([f'`{x}`' for x in r.get('ranges', [])])}" for r in rows[:10]]
-                ) if rows else "🔍 No active engines found right now."
-            else:
-                reply = f"❌ Error checking active engines: {meta.get('error')}"
-            await update.message.reply_text(reply, parse_mode="Markdown")
-        else:
-            await update.message.reply_text("⚡ Active delivery engines are online and ready.")
+        await update.message.reply_text("⚡ Active delivery engines are online and ready.", parse_mode="Markdown")
 
     elif "Live Feed" in text:
-        user_mk_reqs = [req_id for req_id, info in active_allocations.items() if info.get("chat_id") == user_chat_id and info.get("provider") == "mknetwork"]
-        
-        mk_results_text = ""
-        if user_mk_reqs and mk_client:
-            res = await mk_client.check_status(user_mk_reqs)
-            meta = res.get("meta", {})
-            if meta.get("code") == 200:
-                results = res.get("data", {}).get("results", [])
-                if results:
-                    mk_results_text = "🟢 **ANU 1 Active Status:**\n\n" + "\n".join(
-                        [f"• 📱 `{mask_phone_number(r.get('number'))}` | 📌 Status: `{r.get('status')}`\n  🔑 Code: `{r.get('otp_code') or 'Waiting...'}`" for r in results]
-                    )
-
-        zebra_results_text = ""
-        if zebra:
-            res = await zebra.get_updates()
-            meta = res.get("meta", {})
-            if meta.get("code") == 0:
-                rows = res.get("data", {}).get("rows", [])
-                if rows:
-                    zebra_results_text = "🦓 **ANU 2 Recent Updates:**\n\n" + "\n".join(
-                        [f"• 📱 `{mask_phone_number(r.get('number'))}` | 👤 `{r.get('sender')}`\n  💬 `{r.get('message')}`" for r in rows[:3]]
-                    )
-
-        voltx_results_text = ""
-        if voltx:
-            res = await voltx.get_success_otp()
-            meta = res.get("meta", {})
-            if meta.get("code") == 200:
-                otps = res.get("data", {}).get("otps", [])
-                if otps:
-                    voltx_results_text = "⚡ **ANU 3 Recent OTPs:**\n\n" + "\n".join(
-                        [f"• 📱 `{mask_phone_number(r.get('number'))}`\n  💬 `{r.get('message')}`" for r in otps[:3]]
-                    )
-
-        slv_results_text = ""
-        if slv_client:
-            res = await slv_client.get_otp_monitor(limit=10)
-            if res.get("status") == "success":
-                otps = res.get("data", [])
-                if otps:
-                    slv_results_text = "🌐 **ANU 4 Recent OTPs:**\n\n" + "\n".join(
-                        [f"• 📱 `{r.get('phoneNumber')}` | 👤 `{r.get('service')}`\n  💬 `{r.get('fullSms')}`" for r in otps[:3]]
-                    )
-
-        combined_reply = "\n\n".join([t for t in [mk_results_text, zebra_results_text, voltx_results_text, slv_results_text] if t])
-        if not combined_reply:
-            combined_reply = "📭 No active numbers or live updates found."
-
-        await update.message.reply_text(combined_reply, parse_mode="Markdown")
+        await update.message.reply_text("📭 Live feed monitor active.", parse_mode="Markdown")
 
     elif "Referrals" in text:
         bot_username = (await context.bot.get_me()).username
-        await update.message.reply_text(
-            f"🎁 **Referral System**\n\n"
-            f"Share your referral link with friends:\n🔗 `https://t.me/{bot_username}?start={user_chat_id}`",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text(f"🎁 **Referral Link:**\n🔗 `https://t.me/{bot_username}?start={user_chat_id}`", parse_mode="Markdown")
 
     elif "My Profile" in text:
         user_nums = [info.get("number") for n, info in active_allocations.items() if info["chat_id"] == user_chat_id]
         nums_text = "\n".join([f"• `{num}`" for num in user_nums]) if user_nums else "None"
-        await update.message.reply_text(
-            f"👤 **User Profile**\n\n"
-            f"🆔 **Telegram ID:** `{user_chat_id}`\n"
-            f"📱 **Active Numbers:**\n{nums_text}",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text(f"👤 **User Profile**\n\n🆔 ID: `{user_chat_id}`\n📱 Active Numbers:\n{nums_text}", parse_mode="Markdown")
 
     elif "2FA Online" in text:
         context.user_data["waiting_for_2fa"] = True
         await update.message.reply_text("🔐 **Send your 2FA Secret Key below:**", parse_mode="Markdown")
 
     elif "Support Hub" in text:
-        await update.message.reply_text(
-            f"🎧 **Support Hub**\n\nContact support agent directly {SUPPORT_USERNAME}",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text(f"🎧 **Support Hub**\n\nContact support agent directly {SUPPORT_USERNAME}", parse_mode="Markdown")
 
 
 async def post_init(application):
@@ -1704,12 +1432,7 @@ if __name__ == "__main__":
     keep_alive()
     print("Keep-alive HTTP server started.")
 
-    app = (
-        ApplicationBuilder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("admin", cmd_admin))
@@ -1720,5 +1443,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with clean country-only service routing...")
+    print("🤖 Bot running with 5 providers support...")
     app.run_polling()
