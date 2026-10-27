@@ -719,7 +719,7 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def auto_check_updates(app):
-    """Background polling loop supporting all providers concurrently."""
+    """Background polling loop supporting all providers concurrently with channel forwarding."""
     while True:
         try:
             if active_allocations:
@@ -827,6 +827,23 @@ async def auto_check_updates(app):
                                 except Exception as e:
                                     logging.error(f"Error sending DM: {e}")
 
+                                if CHANNEL_CHAT_ID:
+                                    channel_text = (
+                                        "📢 *ANU OTP RECEIVED*\n\n"
+                                        f"📱 *To Number:* `{masked_num}`\n"
+                                        f"{flag_icon} *Country:* {country_name}\n"
+                                        f"👤 *Sender:* `{sender}`\n"
+                                        f"💬 *Full Message:* `{msg_text}`"
+                                    )
+                                    channel_keyboard = InlineKeyboardMarkup([
+                                        [InlineKeyboardButton(f"📋 Copy OTP: {code}", callback_data=f"copy_otp_{code}", style="success")],
+                                        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
+                                    ])
+                                    try:
+                                        await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
+                                    except Exception as err:
+                                        logging.error(f"Failed to post to channel: {err}")
+
                 # 3. Handle VoltX Allocations
                 voltx_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "voltx"]
                 if voltx_numbers and voltx:
@@ -871,6 +888,23 @@ async def auto_check_updates(app):
                                     except Exception as e:
                                         logging.error(f"Error sending DM: {e}")
 
+                                    if CHANNEL_CHAT_ID:
+                                        masked_num = mask_phone_number(formatted_num)
+                                        channel_text = (
+                                            "📢 *ANU OTP RECEIVED*\n\n"
+                                            f"📱 *To Number:* `{masked_num}`\n"
+                                            f"{flag_icon} *Country:* {country_name}\n"
+                                            f"💬 *Full Message:* `{msg_text}`"
+                                        )
+                                        channel_keyboard = InlineKeyboardMarkup([
+                                            [InlineKeyboardButton(f"📋 Copy OTP: {code}", callback_data=f"copy_otp_{code}", style="success")],
+                                            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
+                                        ])
+                                        try:
+                                            await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
+                                        except Exception as err:
+                                            logging.error(f"Failed to post to channel: {err}")
+
                 # 4. Handle SLVirtual Allocations
                 slv_rentals = [rental_id for rental_id, info in active_allocations.items() if info.get("provider") == "slvirtual"]
                 if slv_rentals and slv_client:
@@ -892,6 +926,8 @@ async def auto_check_updates(app):
                                     seen_messages.add(msg_id)
                                     allocation_info = active_allocations[rental_id]
                                     user_chat_id = allocation_info["chat_id"]
+                                    country_name = allocation_info["country"]
+                                    flag_icon = allocation_info["flag"]
 
                                     dm_text = (
                                         "📩 *Verification Code Received!*\n\n"
@@ -903,6 +939,25 @@ async def auto_check_updates(app):
                                         await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
                                     except Exception as e:
                                         logging.error(f"Error sending DM: {e}")
+
+                                    if CHANNEL_CHAT_ID:
+                                        masked_num = mask_phone_number(target_number)
+                                        channel_text = (
+                                            "📢 *ANU OTP RECEIVED*\n\n"
+                                            f"📱 *To Number:* `{masked_num}`\n"
+                                            f"{flag_icon} *Country:* {country_name}\n"
+                                            f"👤 *Sender:* `{service_name}`\n"
+                                            f"💬 *Full Message:* `{msg_text}`"
+                                        )
+                                        channel_keyboard = InlineKeyboardMarkup([
+                                            [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
+                                            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
+                                        ])
+                                        try:
+                                            await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
+                                        except Exception as err:
+                                            logging.error(f"Failed to post to channel: {err}")
+
                                     active_allocations.pop(rental_id, None)
 
                 # 5. Handle FastX Allocations
@@ -916,6 +971,7 @@ async def auto_check_updates(app):
                             target_number = row.get("number")
                             msg_text = row.get("sms")
                             otp_code = row.get("otp")
+                            platform_name = row.get("platform", "FastX")
                             clean_target = re.sub(r"\D", "", target_number)
 
                             matched_alloc_key = None
@@ -933,6 +989,8 @@ async def auto_check_updates(app):
                                     seen_messages.add(msg_id)
                                     allocation_info = active_allocations[matched_alloc_key]
                                     user_chat_id = allocation_info["chat_id"]
+                                    country_name = allocation_info["country"]
+                                    flag_icon = allocation_info["flag"]
                                     formatted_num = f"+{clean_target}"
 
                                     dm_text = (
@@ -945,6 +1003,24 @@ async def auto_check_updates(app):
                                         await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
                                     except Exception as e:
                                         logging.error(f"Error sending DM: {e}")
+
+                                    if CHANNEL_CHAT_ID:
+                                        masked_num = mask_phone_number(formatted_num)
+                                        channel_text = (
+                                            "📢 *ANU OTP RECEIVED*\n\n"
+                                            f"📱 *To Number:* `{masked_num}`\n"
+                                            f"{flag_icon} *Country:* {country_name}\n"
+                                            f"👤 *Sender:* `{platform_name}`\n"
+                                            f"💬 *Full Message:* `{msg_text}`"
+                                        )
+                                        channel_keyboard = InlineKeyboardMarkup([
+                                            [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
+                                            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
+                                        ])
+                                        try:
+                                            await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
+                                        except Exception as err:
+                                            logging.error(f"Failed to post to channel: {err}")
 
         except Exception as e:
             logging.error(f"Error during auto-polling: {e}")
@@ -1168,7 +1244,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
         await query.edit_message_text(
-            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate 3 numbers:*",
+            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate numbers:*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -1204,9 +1280,9 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 await query.message.delete()
             except Exception:
                 pass
-            loading_msg = await context.bot.send_message(chat_id=chat_id, text=f"⏳ Requesting 3 numbers for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
+            loading_msg = await context.bot.send_message(chat_id=chat_id, text=f"⏳ Requesting numbers for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
         else:
-            await query.edit_message_text(f"⏳ Requesting 3 numbers for {flag_icon} range `{selected_range}`...")
+            await query.edit_message_text(f"⏳ Requesting numbers for {flag_icon} range `{selected_range}`...")
 
         allocated_results = []
 
@@ -1277,7 +1353,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                     )
 
             msg = (
-                f"✅ **3 Numbers Allocated Successfully!**\n\n"
+                f"✅ **Number Allocated Successfully!**\n\n"
                 f"👤 **First Name:** `{rand_fname}`\n"
                 f"👤 **Last Name:** `{rand_lname}`\n"
                 f"{final_flag} **Country:** {final_country_name}\n"
