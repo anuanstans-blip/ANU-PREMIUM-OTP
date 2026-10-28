@@ -91,14 +91,14 @@ DEFAULT_RANGES_FASTX = [
 # --- Name Generator Helper ---
 def generate_random_english_name() -> tuple[str, str]:
     first_names = [
-        "James", "Oliver", "Noah", "Liam", "Ethan", "Lucas", "Mason", "Logan",
-        "Emma", "Sophia", "Olivia", "Ava", "Mia", "Isabella", "Harper", "Evelyn",
-        "Alexander", "Benjamin", "Elijah", "William", "Charlotte", "Amelia", "Abigail"
+        "Getu", "Ashenafi", "Noah", "Darge", "Ethan", "Bereket", "Mason", "Logan",
+        "Emma", "Sophia", "Olivia", "Mewuded", "Mia", "Isabella", "Belayneh", "Kalkidan",
+        "Mekdes", "Benjamin", "Elijah", "Girma", "Charlotte", "Amelia", "Tagay"
     ]
     last_names = [
-        "Smith", "Johnson", "Williams", "Brown", "Jones", "Miller", "Davis",
-        "Wilson", "Taylor", "Anderson", "Thomas", "Jackson", "White", "Harris",
-        "Martin", "Thompson", "Garcia", "Martinez", "Robinson", "Clark", "Rodriguez"
+        "Geremew", "Abriham", "Williams", "Kassa", "Jones", "Kondara", "Dawit",
+        "Wilson", "Taylor", "Anderson", "Mulugeta", "Dachasa", "White", "Harris",
+        "Martin", "Takele", "Garcia", "Martinez", "Munuro", "Asaminew", "Rodriguez"
     ]
     return random.choice(first_names), random.choice(last_names)
 
@@ -682,7 +682,7 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     masked_num = mask_phone_number(dummy_number)
 
     dm_text = (
-        "📩 *[TEST] Verification Code Received!*\n\n"
+        "📩 *[TEST] ANU OTP Received!*\n\n"
         f"📱 *To Number:* `{dummy_number}`\n"
         f"👤 *Sender:* `{dummy_sender}`\n"
         f"🔑 *Code:* `{code}`"
@@ -691,7 +691,7 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if CHANNEL_CHAT_ID:
         channel_text = (
-            "📢 *New SMS Received*\n\n"
+            "📢 *ANU OTP Received*\n\n"
             f"📱 *To Number:* `{masked_num}`\n"
             f"{flag_icon} *Country:* {country_name}\n"
             f"👤 *Sender:* `{dummy_sender}`\n"
@@ -718,314 +718,159 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Failed to send to Channel: `{err}`", parse_mode="Markdown")
 
 
+# --- Modular Instant Dispatch Helper ---
+async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, msg_text):
+    """Instantly dispatches SMS/OTP to user DM and public channel with zero delay."""
+    msg_id = f"{target_number}_{otp_code}_{msg_text}"
+    if len(seen_messages) > MAX_SEEN_SIZE:
+        seen_messages.clear()
+    if msg_id in seen_messages:
+        return
+    seen_messages.add(msg_id)
+
+    user_chat_id = allocation_info["chat_id"]
+    country_name = allocation_info["country"]
+    flag_icon = allocation_info["flag"]
+
+    # 1. Send DM directly to User
+    dm_text = (
+        "📩 *ANU OTP Received!*\n\n"
+        f"📱 *To Number:* `{target_number}`\n"
+        f"👤 *Sender:* `{sender}`\n"
+        f"🔑 *Code:* `{otp_code}`\n"
+        f"💬 *Full Message:* `{msg_text}`"
+    )
+    try:
+        await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Error sending DM: {e}")
+
+    # 2. Forward to Public Channel
+    if CHANNEL_CHAT_ID:
+        masked_num = mask_phone_number(target_number)
+        channel_text = (
+            "📢 *ANU OTP RECEIVED*\n\n"
+            f"📱 *To Number:* `{masked_num}`\n"
+            f"{flag_icon} *Country:* {country_name}\n"
+            f"👤 *Sender:* `{sender}`\n"
+            f"💬 *Full Message:* `{msg_text}`"
+        )
+        channel_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
+            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
+        ])
+        try:
+            await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
+        except Exception as err:
+            logging.error(f"Failed to post to channel: {err}")
+
+
+# --- Concurrent Sub-Checkers ---
+async def check_mknetwork_updates(app):
+    mk_req_ids = [req_id for req_id, info in active_allocations.items() if info.get("provider") == "mknetwork"]
+    if mk_req_ids and mk_client:
+        for i in range(0, len(mk_req_ids), 100):
+            batch_ids = mk_req_ids[i:i + 100]
+            res = await mk_client.check_status(batch_ids)
+            meta = res.get("meta", {})
+            if meta.get("code") == 200:
+                results = res.get("data", {}).get("results", [])
+                for row in results:
+                    req_id = row.get("request_id")
+                    status = row.get("status")
+                    if req_id not in active_allocations:
+                        continue
+                    allocation_info = active_allocations[req_id]
+                    if status == "success":
+                        msg_text = row.get("full_sms", "")
+                        otp_code = row.get("otp_code", "")
+                        sender = row.get("operator", "Other")
+                        await dispatch_otp(app, allocation_info, row.get("number"), otp_code, sender, msg_text)
+                        active_allocations.pop(req_id, None)
+                    elif status in ["expired", "not_found"]:
+                        active_allocations.pop(req_id, None)
+
+
+async def check_zebra_updates(app):
+    zebra_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "zebra"]
+    if zebra_numbers and zebra:
+        res = await zebra.get_updates()
+        meta = res.get("meta", {})
+        if meta.get("code") == 0:
+            for row in res.get("data", {}).get("rows", []):
+                target_number = row.get("number")
+                if target_number in active_allocations:
+                    msg_text = row.get("message")
+                    code = extract_code(msg_text)
+                    await dispatch_otp(app, active_allocations[target_number], target_number, code, row.get("sender"), msg_text)
+
+
+async def check_voltx_updates(app):
+    voltx_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "voltx"]
+    if voltx_numbers and voltx:
+        res = await voltx.get_success_otp()
+        meta = res.get("meta", {})
+        if meta.get("code") == 200:
+            for row in res.get("data", {}).get("otps", []):
+                target_number = row.get("number")
+                clean_target = re.sub(r"\D", "", target_number)
+                for alloc_num, info in list(active_allocations.items()):
+                    if info.get("provider") == "voltx" and re.sub(r"\D", "", alloc_num) == clean_target:
+                        msg_text = row.get("message")
+                        code = extract_code(msg_text)
+                        await dispatch_otp(app, info, f"+{clean_target}", code, "VoltX", msg_text)
+                        active_allocations.pop(alloc_num, None)
+
+
+async def check_slvirtual_updates(app):
+    slv_rentals = [rental_id for rental_id, info in active_allocations.items() if info.get("provider") == "slvirtual"]
+    if slv_rentals and slv_client:
+        for rental_id in slv_rentals:
+            res = await slv_client.check_status(rental_id)
+            if res.get("status") == "success":
+                data_row = res.get("data", {})
+                if data_row.get("status") == "RECEIVED":
+                    allocation_info = active_allocations[rental_id]
+                    await dispatch_otp(app, allocation_info, data_row.get("phoneNumber"), data_row.get("otpCode"), data_row.get("service"), data_row.get("fullSms"))
+                    active_allocations.pop(rental_id, None)
+
+
+async def check_fastx_updates(app):
+    fastx_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "fastx"]
+    if fastx_numbers and fastx_client:
+        res = await fastx_client.get_success_otp()
+        meta = res.get("meta", {})
+        if meta.get("code") == 200:
+            for row in res.get("data", {}).get("otps", []):
+                target_number = row.get("number")
+                clean_target = re.sub(r"\D", "", target_number)
+                for alloc_num, info in list(active_allocations.items()):
+                    if info.get("provider") == "fastx" and re.sub(r"\D", "", alloc_num) == clean_target:
+                        msg_text = row.get("sms")
+                        code = row.get("otp")
+                        await dispatch_otp(app, info, f"+{clean_target}", code, row.get("platform", "FastX"), msg_text)
+                        active_allocations.pop(alloc_num, None)
+
+
 async def auto_check_updates(app):
-    """Background polling loop supporting all providers concurrently with channel forwarding."""
+    """Background polling loop checking all providers concurrently with near-zero delay."""
     while True:
         try:
             if active_allocations:
-                # 1. Handle MKNetwork Allocations
-                mk_req_ids = [req_id for req_id, info in active_allocations.items() if info.get("provider") == "mknetwork"]
-                if mk_req_ids and mk_client:
-                    for i in range(0, len(mk_req_ids), 100):
-                        batch_ids = mk_req_ids[i:i + 100]
-                        res = await mk_client.check_status(batch_ids)
-                        meta = res.get("meta", {})
-
-                        if meta.get("code") == 200:
-                            results = res.get("data", {}).get("results", [])
-                            for row in results:
-                                req_id = row.get("request_id")
-                                status = row.get("status")
-                                
-                                if req_id not in active_allocations:
-                                    continue
-
-                                allocation_info = active_allocations[req_id]
-                                user_chat_id = allocation_info["chat_id"]
-                                country_name = allocation_info["country"]
-                                flag_icon = allocation_info["flag"]
-                                target_number = row.get("number")
-                                
-                                if status == "success":
-                                    msg_text = row.get("full_sms", "")
-                                    otp_code = row.get("otp_code", "")
-                                    sender = row.get("operator", "Other")
-
-                                    msg_id = f"{target_number}_{msg_text}"
-                                    if len(seen_messages) > MAX_SEEN_SIZE:
-                                        seen_messages.clear()
-
-                                    if msg_id not in seen_messages:
-                                        seen_messages.add(msg_id)
-                                        
-                                        dm_text = (
-                                            "📩 *ANU OTP Received!*\n\n"
-                                            f"📱 *To Number:* `{target_number}`\n"
-                                            f"👤 *Sender:* `{sender}`\n"
-                                            f"🔑 *Code:* `{otp_code}`"
-                                        )
-                                        try:
-                                            await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
-                                        except Exception as e:
-                                            logging.error(f"Error sending DM: {e}")
-
-                                        if CHANNEL_CHAT_ID:
-                                            masked_num = mask_phone_number(target_number)
-                                            channel_text = (
-                                                "📢 *ANU OTP RECEIVED*\n\n"
-                                                f"📱 *To Number:* `{masked_num}`\n"
-                                                f"{flag_icon} *Country:* {country_name}\n"
-                                                f"👤 *Sender:* `{sender}`\n"
-                                                f"💬 *Full Message:* `{msg_text}`"
-                                            )
-                                            channel_keyboard = InlineKeyboardMarkup([
-                                                [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
-                                                [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
-                                            ])
-                                            try:
-                                                await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
-                                            except Exception as err:
-                                                logging.error(f"Failed to post to channel: {err}")
-
-                                    active_allocations.pop(req_id, None)
-                                elif status in ["expired", "not_found"]:
-                                    active_allocations.pop(req_id, None)
-
-                # 2. Handle Zebra Allocations
-                zebra_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "zebra"]
-                if zebra_numbers and zebra:
-                    res = await zebra.get_updates()
-                    meta = res.get("meta", {})
-                    if meta.get("code") == 0:
-                        rows = res.get("data", {}).get("rows", [])
-                        for row in rows:
-                            target_number = row.get("number")
-                            msg_text = row.get("message")
-                            sender = row.get("sender")
-
-                            msg_id = f"{target_number}_{msg_text}"
-                            if len(seen_messages) > MAX_SEEN_SIZE:
-                                seen_messages.clear()
-
-                            if msg_id not in seen_messages and target_number in active_allocations:
-                                seen_messages.add(msg_id)
-                                allocation_info = active_allocations[target_number]
-                                user_chat_id = allocation_info["chat_id"]
-                                country_name = allocation_info["country"]
-                                flag_icon = allocation_info["flag"]
-                                code = extract_code(msg_text)
-                                masked_num = mask_phone_number(target_number)
-
-                                dm_text = (
-                                    "📩 *Verification Code Received!*\n\n"
-                                    f"📱 *To Number:* `{target_number}`\n"
-                                    f"👤 *Sender:* `{sender}`\n"
-                                    f"🔑 *Code:* `{code}`"
-                                )
-                                try:
-                                    await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
-                                except Exception as e:
-                                    logging.error(f"Error sending DM: {e}")
-
-                                if CHANNEL_CHAT_ID:
-                                    channel_text = (
-                                        "📢 *ANU OTP RECEIVED*\n\n"
-                                        f"📱 *To Number:* `{masked_num}`\n"
-                                        f"{flag_icon} *Country:* {country_name}\n"
-                                        f"👤 *Sender:* `{sender}`\n"
-                                        f"💬 *Full Message:* `{msg_text}`"
-                                    )
-                                    channel_keyboard = InlineKeyboardMarkup([
-                                        [InlineKeyboardButton(f"📋 Copy OTP: {code}", callback_data=f"copy_otp_{code}", style="success")],
-                                        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
-                                    ])
-                                    try:
-                                        await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
-                                    except Exception as err:
-                                        logging.error(f"Failed to post to channel: {err}")
-
-                # 3. Handle VoltX Allocations
-                voltx_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "voltx"]
-                if voltx_numbers and voltx:
-                    res = await voltx.get_success_otp()
-                    meta = res.get("meta", {})
-                    if meta.get("code") == 200:
-                        otps = res.get("data", {}).get("otps", [])
-                        for row in otps:
-                            target_number = row.get("number")
-                            msg_text = row.get("message")
-                            otp_id = row.get("otp_id")
-                            clean_target = re.sub(r"\D", "", target_number)
-                            
-                            matched_alloc_key = None
-                            for alloc_num, info in active_allocations.items():
-                                if info.get("provider") == "voltx" and re.sub(r"\D", "", alloc_num) == clean_target:
-                                    matched_alloc_key = alloc_num
-                                    break
-                            
-                            if matched_alloc_key:
-                                msg_id = f"{target_number}_{otp_id}"
-                                if len(seen_messages) > MAX_SEEN_SIZE:
-                                    seen_messages.clear()
-
-                                if msg_id not in seen_messages:
-                                    seen_messages.add(msg_id)
-                                    allocation_info = active_allocations[matched_alloc_key]
-                                    user_chat_id = allocation_info["chat_id"]
-                                    country_name = allocation_info["country"]
-                                    flag_icon = allocation_info["flag"]
-                                    code = extract_code(msg_text)
-                                    formatted_num = f"+{clean_target}"
-
-                                    dm_text = (
-                                        "📩 *Verification Code Received!*\n\n"
-                                        f"📱 *To Number:* `{formatted_num}`\n"
-                                        f"🔑 *Code:* `{code}`\n"
-                                        f"💬 *Full Message:* `{msg_text}`"
-                                    )
-                                    try:
-                                        await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
-                                    except Exception as e:
-                                        logging.error(f"Error sending DM: {e}")
-
-                                    if CHANNEL_CHAT_ID:
-                                        masked_num = mask_phone_number(formatted_num)
-                                        channel_text = (
-                                            "📢 *ANU OTP RECEIVED*\n\n"
-                                            f"📱 *To Number:* `{masked_num}`\n"
-                                            f"{flag_icon} *Country:* {country_name}\n"
-                                            f"💬 *Full Message:* `{msg_text}`"
-                                        )
-                                        channel_keyboard = InlineKeyboardMarkup([
-                                            [InlineKeyboardButton(f"📋 Copy OTP: {code}", callback_data=f"copy_otp_{code}", style="success")],
-                                            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
-                                        ])
-                                        try:
-                                            await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
-                                        except Exception as err:
-                                            logging.error(f"Failed to post to channel: {err}")
-
-                # 4. Handle SLVirtual Allocations
-                slv_rentals = [rental_id for rental_id, info in active_allocations.items() if info.get("provider") == "slvirtual"]
-                if slv_rentals and slv_client:
-                    for rental_id in slv_rentals:
-                        res = await slv_client.check_status(rental_id)
-                        if res.get("status") == "success":
-                            data_row = res.get("data", {})
-                            if data_row.get("status") == "RECEIVED":
-                                target_number = data_row.get("phoneNumber")
-                                otp_code = data_row.get("otpCode")
-                                msg_text = data_row.get("fullSms")
-                                service_name = data_row.get("service")
-
-                                msg_id = f"{target_number}_{otp_code}"
-                                if len(seen_messages) > MAX_SEEN_SIZE:
-                                    seen_messages.clear()
-
-                                if msg_id not in seen_messages:
-                                    seen_messages.add(msg_id)
-                                    allocation_info = active_allocations[rental_id]
-                                    user_chat_id = allocation_info["chat_id"]
-                                    country_name = allocation_info["country"]
-                                    flag_icon = allocation_info["flag"]
-
-                                    dm_text = (
-                                        "📩 *Verification Code Received!*\n\n"
-                                        f"📱 *To Number:* `{target_number}`\n"
-                                        f"👤 *Sender:* `{service_name}`\n"
-                                        f"🔑 *Code:* `{otp_code}`"
-                                    )
-                                    try:
-                                        await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
-                                    except Exception as e:
-                                        logging.error(f"Error sending DM: {e}")
-
-                                    if CHANNEL_CHAT_ID:
-                                        masked_num = mask_phone_number(target_number)
-                                        channel_text = (
-                                            "📢 *ANU OTP RECEIVED*\n\n"
-                                            f"📱 *To Number:* `{masked_num}`\n"
-                                            f"{flag_icon} *Country:* {country_name}\n"
-                                            f"👤 *Sender:* `{service_name}`\n"
-                                            f"💬 *Full Message:* `{msg_text}`"
-                                        )
-                                        channel_keyboard = InlineKeyboardMarkup([
-                                            [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
-                                            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
-                                        ])
-                                        try:
-                                            await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
-                                        except Exception as err:
-                                            logging.error(f"Failed to post to channel: {err}")
-
-                                    active_allocations.pop(rental_id, None)
-
-                # 5. Handle FastX Allocations
-                fastx_numbers = [num for num, info in active_allocations.items() if info.get("provider") == "fastx"]
-                if fastx_numbers and fastx_client:
-                    res = await fastx_client.get_success_otp()
-                    meta = res.get("meta", {})
-                    if meta.get("code") == 200:
-                        otps = res.get("data", {}).get("otps", [])
-                        for row in otps:
-                            target_number = row.get("number")
-                            msg_text = row.get("sms")
-                            otp_code = row.get("otp")
-                            platform_name = row.get("platform", "FastX")
-                            clean_target = re.sub(r"\D", "", target_number)
-
-                            matched_alloc_key = None
-                            for alloc_num, info in active_allocations.items():
-                                if info.get("provider") == "fastx" and re.sub(r"\D", "", alloc_num) == clean_target:
-                                    matched_alloc_key = alloc_num
-                                    break
-
-                            if matched_alloc_key:
-                                msg_id = f"{target_number}_{otp_code}"
-                                if len(seen_messages) > MAX_SEEN_SIZE:
-                                    seen_messages.clear()
-
-                                if msg_id not in seen_messages:
-                                    seen_messages.add(msg_id)
-                                    allocation_info = active_allocations[matched_alloc_key]
-                                    user_chat_id = allocation_info["chat_id"]
-                                    country_name = allocation_info["country"]
-                                    flag_icon = allocation_info["flag"]
-                                    formatted_num = f"+{clean_target}"
-
-                                    dm_text = (
-                                        "📩 *Verification Code Received!*\n\n"
-                                        f"📱 *To Number:* `{formatted_num}`\n"
-                                        f"🔑 *Code:* `{otp_code}`\n"
-                                        f"💬 *Full Message:* `{msg_text}`"
-                                    )
-                                    try:
-                                        await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
-                                    except Exception as e:
-                                        logging.error(f"Error sending DM: {e}")
-
-                                    if CHANNEL_CHAT_ID:
-                                        masked_num = mask_phone_number(formatted_num)
-                                        channel_text = (
-                                            "📢 *ANU OTP RECEIVED*\n\n"
-                                            f"📱 *To Number:* `{masked_num}`\n"
-                                            f"{flag_icon} *Country:* {country_name}\n"
-                                            f"👤 *Sender:* `{platform_name}`\n"
-                                            f"💬 *Full Message:* `{msg_text}`"
-                                        )
-                                        channel_keyboard = InlineKeyboardMarkup([
-                                            [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
-                                            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
-                                        ])
-                                        try:
-                                            await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
-                                        except Exception as err:
-                                            logging.error(f"Failed to post to channel: {err}")
-
+                # Run all provider requests simultaneously using asyncio.gather
+                await asyncio.gather(
+                    check_mknetwork_updates(app),
+                    check_zebra_updates(app),
+                    check_voltx_updates(app),
+                    check_slvirtual_updates(app),
+                    check_fastx_updates(app),
+                    return_exceptions=True
+                )
         except Exception as e:
             logging.error(f"Error during auto-polling: {e}")
 
-        await asyncio.sleep(3)
+        # Near-zero delay (0.5 seconds) for blazing fast delivery
+        await asyncio.sleep(0.5)
 
 
 async def fake_sms_generator_loop(app):
@@ -1041,13 +886,13 @@ async def fake_sms_generator_loop(app):
                     flag_icon = chosen_range["flag"]
                     range_prefix = re.sub(r"\D", "", chosen_range["range"])[:4]
                     
-                    simulated_num = f"+{range_prefix}{''.join([str(random.randint(0, 9)) for _ in range(6)])}"
-                    otp = str(random.randint(100000, 999999))
+                    simulated_num = f"+{range_prefix}{''.join([str(random.randint(0, 9)) for _ in range(5)])}"
+                    otp = str(random.randint(10000, 999999))
                     msg_text = f"<#> {otp} is your {app_name} verification code."
                     masked_num = mask_phone_number(simulated_num)
 
                     channel_text = (
-                        "📢 *New SMS Received*\n\n"
+                        "📢 *ANU OTP Received*\n\n"
                         f"📱 *To Number:* `{masked_num}`\n"
                         f"{flag_icon} *Country:* {country_name}\n"
                         f"👤 *Sender:* `{app_name}`\n"
@@ -1082,12 +927,12 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton("🟢 ANU 1", callback_data="admin_prov_mknetwork", style="success"),
-            InlineKeyboardButton("🦓 ANU 2", callback_data="admin_prov_zebra", style="primary"),
+            InlineKeyboardButton("🟢 Mk", callback_data="admin_prov_mknetwork", style="success"),
+            InlineKeyboardButton("🦓 Zeb", callback_data="admin_prov_zebra", style="primary"),
         ],
         [
-            InlineKeyboardButton("⚡ ANU 3", callback_data="admin_prov_voltx", style="primary"),
-            InlineKeyboardButton("🌐 ANU 4", callback_data="admin_prov_slvirtual", style="primary"),
+            InlineKeyboardButton("⚡ Vol", callback_data="admin_prov_voltx", style="primary"),
+            InlineKeyboardButton("🌐 Sl", callback_data="admin_prov_slvirtual", style="primary"),
         ],
         [
             InlineKeyboardButton("🚀 FastX", callback_data="admin_prov_fastx", style="success"),
@@ -1147,12 +992,12 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer()
         keyboard = [
             [
-                InlineKeyboardButton("🟢 ANU 1", callback_data="admin_prov_mknetwork", style="success"),
-                InlineKeyboardButton("🦓 ANU 2", callback_data="admin_prov_zebra", style="primary"),
+                InlineKeyboardButton("🟢 Mk", callback_data="admin_prov_mknetwork", style="success"),
+                InlineKeyboardButton("🦓 Zeb", callback_data="admin_prov_zebra", style="primary"),
             ],
             [
-                InlineKeyboardButton("⚡ ANU 3", callback_data="admin_prov_voltx", style="primary"),
-                InlineKeyboardButton("🌐 ANU 4", callback_data="admin_prov_slvirtual", style="primary"),
+                InlineKeyboardButton("⚡ Vol", callback_data="admin_prov_voltx", style="primary"),
+                InlineKeyboardButton("🌐 Sl", callback_data="admin_prov_slvirtual", style="primary"),
             ],
             [
                 InlineKeyboardButton("🚀 FastX", callback_data="admin_prov_fastx", style="success"),
@@ -1353,7 +1198,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                     )
 
             msg = (
-                f"✅ **Number Allocated Successfully!**\n\n"
+                f"✅ **Number Allocated!**\n\n"
                 f"👤 **First Name:** `{rand_fname}`\n"
                 f"👤 **Last Name:** `{rand_lname}`\n"
                 f"{final_flag} **Country:** {final_country_name}\n"
