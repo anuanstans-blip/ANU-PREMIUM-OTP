@@ -738,7 +738,6 @@ async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, ms
         f"📱 *To Number:* `{target_number}`\n"
         f"👤 *Sender:* `{sender}`\n"
         f"🔑 *Code:* `{otp_code}`\n"
-        f"💬 *Full Message:* `{msg_text}`"
     )
     try:
         await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
