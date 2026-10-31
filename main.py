@@ -452,6 +452,17 @@ class SLVirtualNumberClient:
 slv_client = SLVirtualNumberClient(SLV_API_KEY) if SLV_API_KEY else None
 
 
+async def auto_delete_allocation_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, alloc_key: str):
+    """Waits 15 minutes (900 seconds) and deletes the message if no OTP arrived."""
+    await asyncio.sleep(900)
+    if alloc_key in active_allocations:
+        active_allocations.pop(alloc_key, None)
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception as e:
+            logging.error(f"Error auto-deleting message after 15 min: {e}")
+
+
 async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dummy_number = "+393241234567"
     dummy_sender = "WHATSAPP"
@@ -830,6 +841,13 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         chosen_provider = parts[0]
         selected_range = parts[1]
 
+        # 1. Delete previous message if triggered via "Change Number"
+        if is_change:
+            try:
+                await query.message.delete()
+            except Exception as e:
+                logging.error(f"Error deleting old number message: {e}")
+
         all_ranges = db_get_all_managed_ranges()
         matched_item = next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
         c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
@@ -885,7 +903,17 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             ]
             keyboard = InlineKeyboardMarkup(keyboard_layout)
 
-            await loading_msg.edit_text(msg, parse_mode="Markdown", reply_markup=keyboard)
+            allocated_msg = await loading_msg.edit_text(msg, parse_mode="Markdown", reply_markup=keyboard)
+
+            # 2. Schedule auto-deletion task after 15 minutes if no OTP arrives
+            asyncio.create_task(
+                auto_delete_allocation_message(
+                    context=context,
+                    chat_id=chat_id,
+                    message_id=allocated_msg.message_id,
+                    alloc_key=first_entry[0]
+                )
+            )
         else:
             fallback_keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Try Again", callback_data=data, style="success")],
@@ -1040,5 +1068,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with bottom message posting for allocated numbers...")
+    print("🤖 Bot running with message auto-deletion & fresh allocation per request...")
     app.run_polling()
