@@ -803,7 +803,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
         await query.edit_message_text(
-            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate numbers:*",
+            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate number:*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -839,19 +839,18 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 await query.message.delete()
             except Exception:
                 pass
-            loading_msg = await context.bot.send_message(chat_id=chat_id, text=f"⏳ Requesting numbers for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
+            loading_msg = await context.bot.send_message(chat_id=chat_id, text=f"⏳ Requesting number for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
         else:
-            await query.edit_message_text(f"⏳ Requesting numbers for {flag_icon} range `{selected_range}`...")
+            await query.edit_message_text(f"⏳ Requesting number for {flag_icon} range `{selected_range}`...")
 
         allocated_results = []
 
+        # Request ONLY 1 number per request
         if slv_client:
-            tasks = [slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp")) for _ in range(3)]
-            responses = await asyncio.gather(*tasks, return_exceptions=True)
-            for res in responses:
-                if isinstance(res, dict) and res.get("status") == "success":
-                    d = res.get("data", {})
-                    allocated_results.append((d.get("rentalId"), d.get("phoneNumber"), d.get("country")))
+            res = await slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp"))
+            if isinstance(res, dict) and res.get("status") == "success":
+                d = res.get("data", {})
+                allocated_results.append((d.get("rentalId"), d.get("phoneNumber"), d.get("country")))
 
         if allocated_results:
             first_entry = allocated_results[0]
@@ -883,7 +882,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             )
 
             keyboard_layout = number_copy_buttons + [
-                [InlineKeyboardButton("🔄 Change Numbers 🟠", callback_data=f"change_{chosen_provider}_{selected_range}", style="danger")],
+                [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}", style="danger")],
                 [InlineKeyboardButton("📢 Open OTP Channel 🔵", url=CHANNEL_URL, style="primary")],
             ]
             keyboard = InlineKeyboardMarkup(keyboard_layout)
@@ -893,7 +892,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             else:
                 await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)
         else:
-            msg = f"❌ **Failed to allocate numbers.** Service currently out of stock."
+            msg = f"❌ **Failed to allocate number.** Service currently out of stock."
             if is_change:
                 await loading_msg.edit_text(msg, parse_mode="Markdown")
             else:
@@ -909,7 +908,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret}", style="success")]])
             await query.edit_message_text(f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s", parse_mode="Markdown", reply_markup=refresh_keyboard)
         except Exception:
-            await query.edit_message_text("❌ Failed to refresh code.")
+            await query.edit_message_text("❌ Invalid 2FA secret key!")
 
     elif data.startswith("copy_otp_"):
         otp_val = data.replace("copy_otp_", "")
@@ -1042,5 +1041,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running exclusively with SL Virtual provider...")
+    print("🤖 Bot running exclusively with SL Virtual provider (1 number per request)...")
     app.run_polling()
