@@ -31,8 +31,20 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_CHAT_ID = int(os.getenv("CHANNEL_CHAT_ID", "0"))
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/")
 
+MKNETWORK_API_KEY = os.getenv("MKNETWORK_API_KEY")
+MKNETWORK_BASE_URL = os.getenv("MKNETWORK_BASE_URL", "https://mknetworkbd.com/api/v2/public")
+
+ZEBRA_API_KEY = os.getenv("ZEBRA_API_KEY")
+ZEBRA_BASE_URL = os.getenv("ZEBRA_BASE_URL", "https://api.zebrasms.com/api/v1")
+
+VOLTX_API_KEY = os.getenv("VOLTX_API_KEY")
+VOLTX_BASE_URL = os.getenv("VOLTX_BASE_URL", "https://api.2oo9.cloud/MXS47FLFX0U/tnevs/@public/api")
+
 SLV_API_KEY = os.getenv("SLV_API_KEY")
 SLV_BASE_URL = os.getenv("SLV_BASE_URL", "https://slvirtualnumber.com")
+
+FASTX_API_KEY = os.getenv("FASTX_API_KEY")
+FASTX_BASE_URL = os.getenv("FASTX_BASE_URL", "https://2eee7.com/@Access/@Bot/2eee7/@public")
 
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans")
 
@@ -64,9 +76,21 @@ fake_otp_settings = {
     "interval": 15,
 }
 
-# Fallback default ranges for SL Virtual
+# Fallback default ranges for all 5 providers
+DEFAULT_RANGES_MK = [
+    {"service": "Facebook", "country": "Sierra Leone", "flag": "🇸🇱", "range": "23276345XXX"},
+]
+DEFAULT_RANGES_ZEBRA = [
+    {"service": "Facebook", "country": "Cambodia", "flag": "🇰🇭", "range": "85531879XXX"},
+]
+DEFAULT_RANGES_VOLTX = [
+    {"service": "Telegram", "country": "United Kingdom", "flag": "🇬🇧", "range": "26134"},
+]
 DEFAULT_RANGES_SLV = [
     {"service": "WhatsApp", "country": "Italy", "flag": "🇮🇹", "range": "39324"},
+]
+DEFAULT_RANGES_FASTX = [
+    {"service": "WhatsApp", "country": "Ivory Coast", "flag": "🇨🇮", "range": "22501XXX"},
 ]
 
 
@@ -111,7 +135,16 @@ def db_get_all_users() -> list:
 
 def db_get_managed_ranges(provider: str) -> list:
     if not supabase:
-        return DEFAULT_RANGES_SLV
+        if provider == "mknetwork":
+            return DEFAULT_RANGES_MK
+        elif provider == "zebra":
+            return DEFAULT_RANGES_ZEBRA
+        elif provider == "voltx":
+            return DEFAULT_RANGES_VOLTX
+        elif provider == "slvirtual":
+            return DEFAULT_RANGES_SLV
+        else:
+            return DEFAULT_RANGES_FASTX
     try:
         response = supabase.table("managed_ranges").select("*").eq("provider", provider).execute()
         if response.data:
@@ -123,9 +156,14 @@ def db_get_managed_ranges(provider: str) -> list:
 
 
 def db_get_all_managed_ranges() -> list:
-    """Retrieve all managed ranges for SL Virtual."""
+    """Retrieve all managed ranges across all five providers."""
     if not supabase:
-        return [{**r, "provider": "slvirtual"} for r in DEFAULT_RANGES_SLV]
+        mk = [{**r, "provider": "mknetwork"} for r in DEFAULT_RANGES_MK]
+        zebra_r = [{**r, "provider": "zebra"} for r in DEFAULT_RANGES_ZEBRA]
+        voltx_r = [{**r, "provider": "voltx"} for r in DEFAULT_RANGES_VOLTX]
+        slv_r = [{**r, "provider": "slvirtual"} for r in DEFAULT_RANGES_SLV]
+        fastx_r = [{**r, "provider": "fastx"} for r in DEFAULT_RANGES_FASTX]
+        return mk + zebra_r + voltx_r + slv_r + fastx_r
     try:
         response = supabase.table("managed_ranges").select("*").execute()
         return response.data if response.data else []
@@ -266,7 +304,7 @@ COUNTRY_FLAG_MAP = {
     "saudi arabia": ("Saudi Arabia", "🇸🇦"), "966": ("Saudi Arabia", "🇸🇦"),
     "singapore": ("Singapore", "🇸🇬"), "65": ("Singapore", "🇸🇬"),
     "south korea": ("South Korea", "🇰🇷"), "korea": ("South Korea", "🇰🇷"), "82": ("South Korea", "🇰🇷"),
-    "sri lanka": ("Sri Lanka", "🇱🇰"), "94": ("Sri Lanka", "🇱🇰"),
+    "sri lanka": ("Sri Lanka", "🇱LK"), "94": ("Sri Lanka", "🇱🇰"),
     "syria": ("Syria", "🇸🇾"), "963": ("Syria", "🇸🇾"),
     "taiwan": ("Taiwan", "🇹🇼"), "886": ("Taiwan", "🇹🇼"),
     "tajikistan": ("Tajikistan", "🇹🇯"), "992": ("Tajikistan", "🇹🇯"),
@@ -412,7 +450,101 @@ def extract_code(message_text: str) -> str:
     return match.group(0) if match else "No code found"
 
 
-# --- SL Virtual API Client ---
+# --- API Clients ---
+
+class MKNetworkClient:
+    def __init__(self, api_key: str):
+        self.base_url = MKNETWORK_BASE_URL
+        self.headers = {
+            "mknetwork-key": api_key,
+            "Content-Type": "application/json",
+        }
+        self.client = httpx.AsyncClient(timeout=3.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
+
+    async def get_number(self, range_val: str) -> dict:
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/getnum/number",
+                headers=self.headers,
+                json={"range": range_val},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+
+    async def check_status(self, request_ids: list) -> dict:
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/check/status",
+                headers=self.headers,
+                json={"request_ids": request_ids},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+
+
+class ZebraSMSClient:
+    def __init__(self, api_key: str):
+        self.base_url = ZEBRA_BASE_URL
+        self.headers = {
+            "MAuth": api_key,
+            "Content-Type": "application/json",
+        }
+        self.client = httpx.AsyncClient(timeout=3.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
+
+    async def get_number(self, range_val: str) -> dict:
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/publicapi/getnum",
+                headers=self.headers,
+                json={"range": range_val},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "error": str(e)}}
+
+    async def get_updates(self) -> dict:
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/publicapi/getupdate",
+                headers=self.headers,
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "error": str(e)}}
+
+
+class VoltXSMSClient:
+    def __init__(self, api_key: str):
+        self.base_url = VOLTX_BASE_URL
+        self.headers = {
+            "mauthapi": api_key,
+            "Content-Type": "application/json",
+        }
+        self.client = httpx.AsyncClient(timeout=3.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
+
+    async def get_number(self, rid: str) -> dict:
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/getnum",
+                headers=self.headers,
+                json={"rid": rid},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+
+    async def get_success_otp(self) -> dict:
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/success-otp",
+                headers=self.headers,
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+
 
 class SLVirtualNumberClient:
     def __init__(self, api_key: str):
@@ -449,14 +581,49 @@ class SLVirtualNumberClient:
             return {"status": "error", "message": str(e)}
 
 
+class FastXClient:
+    def __init__(self, api_key: str):
+        self.base_url = FASTX_BASE_URL.rstrip("/")
+        self.headers = {
+            "X-API-Key": api_key,
+            "Content-Type": "application/json",
+        }
+        self.client = httpx.AsyncClient(timeout=3.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
+
+    async def get_number(self, range_val: str) -> dict:
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/getnum",
+                headers=self.headers,
+                json={"range": range_val},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+
+    async def get_success_otp(self) -> dict:
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/api/success-otp-info",
+                headers=self.headers,
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+
+
+mk_client = MKNetworkClient(MKNETWORK_API_KEY) if MKNETWORK_API_KEY else None
+zebra = ZebraSMSClient(ZEBRA_API_KEY) if ZEBRA_API_KEY else None
+voltx = VoltXSMSClient(VOLTX_API_KEY) if VOLTX_API_KEY else None
 slv_client = SLVirtualNumberClient(SLV_API_KEY) if SLV_API_KEY else None
+fastx_client = FastXClient(FASTX_API_KEY) if FASTX_API_KEY else None
 
 
 async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    dummy_number = "+393241234567"
-    dummy_sender = "WHATSAPP"
-    dummy_message = "<#> 123456 is your verification code"
-    country_name, flag_icon = auto_detect_country_and_flag("Italy", dummy_number)
+    dummy_number = "+23276345652"
+    dummy_sender = "FACEBOOK"
+    dummy_message = "<#> 031397 is your verification code"
+    country_name, flag_icon = auto_detect_country_and_flag("Sierra Leone", dummy_number)
 
     code = extract_code(dummy_message)
     masked_num = mask_phone_number(dummy_number)
@@ -564,6 +731,7 @@ async def poll_single_allocation(app, alloc_key):
     start_time = asyncio.get_event_loop().time()
 
     while alloc_key in active_allocations:
+        # Auto-expire worker after 15 minutes (900 seconds)
         if asyncio.get_event_loop().time() - start_time > 900:
             active_allocations.pop(alloc_key, None)
             break
@@ -572,8 +740,43 @@ async def poll_single_allocation(app, alloc_key):
         if not info:
             break
 
+        provider = info.get("provider")
+
         try:
-            if slv_client:
+            if provider == "mknetwork" and mk_client:
+                res = await mk_client.check_status([alloc_key])
+                if res.get("meta", {}).get("code") == 200:
+                    for row in res.get("data", {}).get("results", []):
+                        if row.get("status") == "success":
+                            await dispatch_otp(app, info, row.get("number"), row.get("otp_code", ""), row.get("operator", "Other"), row.get("full_sms", ""))
+                            active_allocations.pop(alloc_key, None)
+                            return
+                        elif row.get("status") in ["expired", "not_found"]:
+                            active_allocations.pop(alloc_key, None)
+                            return
+
+            elif provider == "zebra" and zebra:
+                res = await zebra.get_updates()
+                if res.get("meta", {}).get("code") == 0:
+                    for row in res.get("data", {}).get("rows", []):
+                        if row.get("number") == alloc_key:
+                            msg_text = row.get("message")
+                            code = extract_code(msg_text)
+                            await dispatch_otp(app, info, alloc_key, code, row.get("sender"), msg_text)
+
+            elif provider == "voltx" and voltx:
+                res = await voltx.get_success_otp()
+                if res.get("meta", {}).get("code") == 200:
+                    clean_target = re.sub(r"\D", "", alloc_key)
+                    for row in res.get("data", {}).get("otps", []):
+                        if re.sub(r"\D", "", row.get("number")) == clean_target:
+                            msg_text = row.get("message")
+                            code = extract_code(msg_text)
+                            await dispatch_otp(app, info, f"+{clean_target}", code, "VoltX", msg_text)
+                            active_allocations.pop(alloc_key, None)
+                            return
+
+            elif provider == "slvirtual" and slv_client:
                 res = await slv_client.check_status(alloc_key)
                 if res.get("status") == "success":
                     data_row = res.get("data", {})
@@ -581,6 +784,18 @@ async def poll_single_allocation(app, alloc_key):
                         await dispatch_otp(app, info, data_row.get("phoneNumber"), data_row.get("otpCode"), data_row.get("service"), data_row.get("fullSms"))
                         active_allocations.pop(alloc_key, None)
                         return
+
+            elif provider == "fastx" and fastx_client:
+                res = await fastx_client.get_success_otp()
+                if res.get("meta", {}).get("code") == 200:
+                    clean_target = re.sub(r"\D", "", alloc_key)
+                    for row in res.get("data", {}).get("otps", []):
+                        if re.sub(r"\D", "", row.get("number")) == clean_target:
+                            msg_text = row.get("sms")
+                            code = row.get("otp")
+                            await dispatch_otp(app, info, f"+{clean_target}", code, row.get("platform", "FastX"), msg_text)
+                            active_allocations.pop(alloc_key, None)
+                            return
         except Exception as e:
             logging.error(f"Error polling worker for {alloc_key}: {e}")
 
@@ -657,7 +872,15 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton("🌐 SL Virtual", callback_data="admin_prov_slvirtual", style="success"),
+            InlineKeyboardButton("🟢 Mk", callback_data="admin_prov_mknetwork", style="success"),
+            InlineKeyboardButton("🦓 Zeb", callback_data="admin_prov_zebra", style="primary"),
+        ],
+        [
+            InlineKeyboardButton("⚡ Vol", callback_data="admin_prov_voltx", style="primary"),
+            InlineKeyboardButton("🌐 Sl", callback_data="admin_prov_slvirtual", style="primary"),
+        ],
+        [
+            InlineKeyboardButton("🚀 FastX", callback_data="admin_prov_fastx", style="success"),
             InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake", style="primary"),
         ],
         [
@@ -669,7 +892,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_msg = (
         f"🛠 **Admin Configuration Panel** 🛠\n\n"
         f"🧪 **Fake SMS Simulation:** {fake_status} (Interval: {fake_otp_settings['interval']}s)\n\n"
-        f"👇 *Select SL Virtual to manage ranges or toggle settings:*"
+        f"👇 *Select a provider to manage ranges or toggle settings:*"
     )
     await update.message.reply_text(admin_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -693,7 +916,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         ) or "No active ranges configured."
 
         msg = (
-            f"🛠 **Admin Panel: SL Virtual** 🛠\n\n"
+            f"🛠 **Admin Panel: {prov.upper()}** 🛠\n\n"
             f"📋 **Current Active Ranges:**\n{ranges_text}\n\n"
             f"👇 *Manage ranges below:*"
         )
@@ -714,7 +937,15 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer()
         keyboard = [
             [
-                InlineKeyboardButton("🌐 SL Virtual", callback_data="admin_prov_slvirtual", style="success"),
+                InlineKeyboardButton("🟢 Mk", callback_data="admin_prov_mknetwork", style="success"),
+                InlineKeyboardButton("🦓 Zeb", callback_data="admin_prov_zebra", style="primary"),
+            ],
+            [
+                InlineKeyboardButton("⚡ Vol", callback_data="admin_prov_voltx", style="primary"),
+                InlineKeyboardButton("🌐 Sl", callback_data="admin_prov_slvirtual", style="primary"),
+            ],
+            [
+                InlineKeyboardButton("🚀 FastX", callback_data="admin_prov_fastx", style="success"),
                 InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake", style="primary"),
             ],
             [
@@ -725,7 +956,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         admin_msg = (
             f"🛠 **Admin Configuration Panel** 🛠\n\n"
             f"🧪 **Fake SMS Simulation:** {fake_status} (Interval: {fake_otp_settings['interval']}s)\n\n"
-            f"👇 *Select SL Virtual to manage ranges or toggle settings:*"
+            f"👇 *Select a provider to manage ranges or toggle settings:*"
         )
         await query.edit_message_text(admin_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -735,7 +966,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data["waiting_for_range"] = prov
         context.user_data["waiting_for_broadcast"] = False
         await query.message.reply_text(
-            f"✍ **Send configuration for SL Virtual:**\n\n`Service | Country | Range`\n👉 *Example:* `WhatsApp | Italy | 39324`",
+            f"✍ **Send configuration for {prov.upper()}:**\n\n`Service | Country | Range`\n👉 *Example:* `WhatsApp | Ivory Coast | 22501XXX`",
             parse_mode="Markdown",
         )
         await query.answer()
@@ -776,8 +1007,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data.startswith("admin_clear_"):
         prov = data.replace("admin_clear_", "")
         db_clear_managed_ranges(prov)
-        await query.answer("All SL Virtual ranges cleared!", show_alert=True)
-        await query.edit_message_text("🗑 **All configured SL Virtual ranges cleared.**")
+        await query.answer(f"All {prov.upper()} ranges cleared!", show_alert=True)
+        await query.edit_message_text(f"🗑 **All configured {prov.upper()} ranges cleared.**")
 
 
 async def user_provision_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -845,13 +1076,49 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
         allocated_results = []
 
-        if slv_client:
+        if chosen_provider == "mknetwork" and mk_client:
+            tasks = [mk_client.get_number(selected_range) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+                    d = res.get("data", {})
+                    allocated_results.append((d.get("request_id"), d.get("number"), d.get("country")))
+                    
+        elif chosen_provider == "zebra" and zebra:
+            tasks = [zebra.get_number(selected_range) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
+                    rows = res.get("data", {}).get("rows", [])
+                    if rows:
+                        r = rows[0]
+                        allocated_results.append((r.get("number"), r.get("number"), r.get("country")))
+
+        elif chosen_provider == "voltx" and voltx:
+            tasks = [voltx.get_number(selected_range) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+                    d = res.get("data", {})
+                    num = d.get("full_number")
+                    allocated_results.append((num, num, d.get("country")))
+
+        elif chosen_provider == "slvirtual" and slv_client:
             tasks = [slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp")) for _ in range(3)]
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             for res in responses:
                 if isinstance(res, dict) and res.get("status") == "success":
                     d = res.get("data", {})
                     allocated_results.append((d.get("rentalId"), d.get("phoneNumber"), d.get("country")))
+
+        elif chosen_provider == "fastx" and fastx_client:
+            tasks = [fastx_client.get_number(selected_range) for _ in range(3)]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in responses:
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+                    d = res.get("data", {})
+                    num = d.get("full_number")
+                    allocated_results.append((num, num, d.get("country")))
 
         if allocated_results:
             first_entry = allocated_results[0]
@@ -980,7 +1247,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["waiting_for_range"] = None
 
         await update.message.reply_text(
-            f"✅ **Successfully saved range for SL Virtual!**\n📌 Service: `{service}`\n{detected_flag} Country: `{c_name}`\n🔢 Range: `{range_val}`",
+            f"✅ **Successfully saved range for {prov.upper()}!**\n📌 Service: `{service}`\n{detected_flag} Country: `{c_name}`\n🔢 Range: `{range_val}`",
             parse_mode="Markdown",
             reply_markup=get_main_keyboard(),
         )
@@ -1042,5 +1309,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running exclusively with SL Virtual provider...")
+    print("🤖 Bot running with 5 providers support...")
     app.run_polling()
