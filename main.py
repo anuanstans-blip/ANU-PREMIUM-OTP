@@ -361,7 +361,7 @@ COUNTRY_FLAG_MAP = {
 
     # Oceania
     "australia": ("Australia", "🇦🇺"), "61": ("Australia", "🇦🇺"),
-    "fiji": ("Fiji", "🇫🇯"), "679": ("Fiji", "🇫🇯"),
+    "fiji": ("Fiji", "🇫FJ"), "679": ("Fiji", "🇫🇯"),
     "kiribati": ("Kiribati", "🇰🇮"), "686": ("Kiribati", "🇰🇮"),
     "marshall islands": ("Marshall Islands", "🇲🇭"), "692": ("Marshall Islands", "🇲🇭"),
     "micronesia": ("Micronesia", "🇫🇲"), "691": ("Micronesia", "🇫🇲"),
@@ -834,7 +834,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         matched_item = next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
         c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
 
-        # Always edit the text directly to provide instant UI feedback
+        # Edit message in-place to update the existing view
         await query.edit_message_text(f"⏳ Requesting number for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
 
         allocated_results = []
@@ -1037,5 +1037,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running exclusively with SL Virtual provider (1 number per request + fixed change button)...")
+    print("🤖 Bot running with fixed in-place message editing for Change Number button...")
     app.run_polling()
