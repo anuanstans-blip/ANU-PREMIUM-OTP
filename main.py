@@ -59,19 +59,16 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# --- Global State ---
+# --- Global State & Async Queue ---
 active_allocations = {}
 seen_messages = set()
 MAX_SEEN_SIZE = 5000
 
-# Per-provider concurrency semaphores to prevent API queue lockups
-provider_semaphores = {
-    "mknetwork": asyncio.Semaphore(1),
-    "zebra": asyncio.Semaphore(1),
-    "voltx": asyncio.Semaphore(1),
-    "slvirtual": asyncio.Semaphore(1),
-    "fastx": asyncio.Semaphore(1),
-}
+# High-throughput asynchronous dispatch queue
+otp_dispatch_queue = asyncio.Queue()
+
+# Track active background tasks per allocation key to prevent duplicate workers
+active_worker_tasks = {}
 
 # Fake OTP Generator State & Settings
 fake_otp_settings = {
@@ -307,7 +304,7 @@ COUNTRY_FLAG_MAP = {
     "saudi arabia": ("Saudi Arabia", "🇸🇦"), "966": ("Saudi Arabia", "🇸🇦"),
     "singapore": ("Singapore", "🇸🇬"), "65": ("Singapore", "🇸🇬"),
     "south korea": ("South Korea", "🇰🇷"), "korea": ("South Korea", "🇰🇷"), "82": ("South Korea", "🇰🇷"),
-    "sri lanka": ("Sri Lanka", "🇱🇰"), "94": ("Sri Lanka", "🇱🇰"),
+    "sri lanka": ("Sri Lanka", "🇱LK"), "94": ("Sri Lanka", "🇱🇰"),
     "syria": ("Syria", "🇸🇾"), "963": ("Syria", "🇸🇾"),
     "taiwan": ("Taiwan", "🇹🇼"), "886": ("Taiwan", "🇹🇼"),
     "tajikistan": ("Tajikistan", "🇹🇯"), "992": ("Tajikistan", "🇹🇯"),
@@ -453,7 +450,7 @@ def extract_code(message_text: str) -> str:
     return match.group(0) if match else "No code found"
 
 
-# --- API Clients with Fast Timeout Limits ---
+# --- API Clients ---
 
 class MKNetworkClient:
     def __init__(self, api_key: str):
@@ -668,168 +665,155 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Failed to send to Channel: `{err}`", parse_mode="Markdown")
 
 
-# --- Modular Instant Dispatch Helper ---
-async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, msg_text):
-    """Instantly dispatches SMS/OTP to user DM and public channel with zero delay."""
-    msg_id = f"{target_number}_{otp_code}_{msg_text}"
-    if len(seen_messages) > MAX_SEEN_SIZE:
-        seen_messages.clear()
-    if msg_id in seen_messages:
-        return
-    seen_messages.add(msg_id)
-
-    user_chat_id = allocation_info["chat_id"]
-    country_name = allocation_info["country"]
-    flag_icon = allocation_info["flag"]
-
-    # 1. Send DM directly to User
-    dm_text = (
-        "📩 *ANU OTP Received!*\n\n"
-        f"📱 *To Number:* `{target_number}`\n"
-        f"👤 *Sender:* `{sender}`\n"
-        f"🔑 *Code:* `{otp_code}`\n"
-    )
-    try:
-        await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Error sending DM: {e}")
-
-    # 2. Forward to Public Channel
-    if CHANNEL_CHAT_ID:
-        masked_num = mask_phone_number(target_number)
-        channel_text = (
-            "📢 *ANU OTP RECEIVED*\n\n"
-            f"📱 *To Number:* `{masked_num}`\n"
-            f"{flag_icon} *Country:* {country_name}\n"
-            f"👤 *Sender:* `{sender}`\n"
-            f"💬 *Full Message:* `{msg_text}`"
-        )
-        channel_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
-            [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
-        ])
+# --- Non-Blocking Dispatch Consumer Queue ---
+async def dispatch_consumer_loop(app):
+    """Permanently drains the queue and sends messages instantly."""
+    while True:
         try:
-            await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
-        except Exception as err:
-            logging.error(f"Failed to post to channel: {err}")
+            item = await otp_dispatch_queue.get()
+            allocation_info, target_number, otp_code, sender, msg_text = item
+            
+            msg_id = f"{target_number}_{otp_code}_{msg_text}"
+            if len(seen_messages) > MAX_SEEN_SIZE:
+                seen_messages.clear()
+            if msg_id in seen_messages:
+                otp_dispatch_queue.task_done()
+                continue
+            seen_messages.add(msg_id)
+
+            user_chat_id = allocation_info["chat_id"]
+            country_name = allocation_info["country"]
+            flag_icon = allocation_info["flag"]
+
+            dm_text = (
+                "📩 *ANU OTP Received!*\n\n"
+                f"📱 *To Number:* `{target_number}`\n"
+                f"👤 *Sender:* `{sender}`\n"
+                f"🔑 *Code:* `{otp_code}`\n"
+            )
+            try:
+                await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
+            except Exception as e:
+                logging.error(f"Error sending DM: {e}")
+
+            if CHANNEL_CHAT_ID:
+                masked_num = mask_phone_number(target_number)
+                channel_text = (
+                    "📢 *ANU OTP RECEIVED*\n\n"
+                    f"📱 *To Number:* `{masked_num}`\n"
+                    f"{flag_icon} *Country:* {country_name}\n"
+                    f"👤 *Sender:* `{sender}`\n"
+                    f"💬 *Full Message:* `{msg_text}`"
+                )
+                channel_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
+                    [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
+                ])
+                try:
+                    await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
+                except Exception as err:
+                    logging.error(f"Failed to post to channel: {err}")
+
+            otp_dispatch_queue.task_done()
+        except Exception as e:
+            logging.error(f"Error in consumer loop: {e}")
+            await asyncio.sleep(0.1)
 
 
-# --- Non-Blocking Sub-Checkers guarded by Semaphores ---
-async def check_mknetwork_updates(app):
-    if provider_semaphores["mknetwork"].locked():
-        return
-    async with provider_semaphores["mknetwork"]:
-        mk_req_ids = [req_id for req_id, info in list(active_allocations.items()) if info.get("provider") == "mknetwork"]
-        if mk_req_ids and mk_client:
-            for i in range(0, len(mk_req_ids), 100):
-                batch_ids = mk_req_ids[i:i + 100]
-                res = await mk_client.check_status(batch_ids)
-                meta = res.get("meta", {})
-                if meta.get("code") == 200:
-                    results = res.get("data", {}).get("results", [])
-                    for row in results:
-                        req_id = row.get("request_id")
-                        status = row.get("status")
-                        if req_id not in active_allocations:
-                            continue
-                        allocation_info = active_allocations[req_id]
-                        if status == "success":
-                            msg_text = row.get("full_sms", "")
-                            otp_code = row.get("otp_code", "")
-                            sender = row.get("operator", "Other")
-                            await dispatch_otp(app, allocation_info, row.get("number"), otp_code, sender, msg_text)
-                            active_allocations.pop(req_id, None)
-                        elif status in ["expired", "not_found"]:
-                            active_allocations.pop(req_id, None)
+async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, msg_text):
+    """Pushes OTP details into the non-blocking queue instantly."""
+    await otp_dispatch_queue.put((allocation_info, target_number, otp_code, sender, msg_text))
 
 
-async def check_zebra_updates(app):
-    if provider_semaphores["zebra"].locked():
-        return
-    async with provider_semaphores["zebra"]:
-        zebra_numbers = [num for num, info in list(active_allocations.items()) if info.get("provider") == "zebra"]
-        if zebra_numbers and zebra:
-            res = await zebra.get_updates()
-            meta = res.get("meta", {})
-            if meta.get("code") == 0:
-                for row in res.get("data", {}).get("rows", []):
-                    target_number = row.get("number")
-                    if target_number in active_allocations:
-                        msg_text = row.get("message")
-                        code = extract_code(msg_text)
-                        await dispatch_otp(app, active_allocations[target_number], target_number, code, row.get("sender"), msg_text)
+# --- Dedicated Worker Task Per Active Allocation ---
+async def poll_single_allocation(app, alloc_key):
+    """Dedicated background loop that polls only one allocated number until solved or expired."""
+    start_time = asyncio.get_event_loop().time()
 
+    while alloc_key in active_allocations:
+        # Auto-expire worker after 15 minutes (900 seconds)
+        if asyncio.get_event_loop().time() - start_time > 900:
+            active_allocations.pop(alloc_key, None)
+            break
 
-async def check_voltx_updates(app):
-    if provider_semaphores["voltx"].locked():
-        return
-    async with provider_semaphores["voltx"]:
-        voltx_numbers = [num for num, info in list(active_allocations.items()) if info.get("provider") == "voltx"]
-        if voltx_numbers and voltx:
-            res = await voltx.get_success_otp()
-            meta = res.get("meta", {})
-            if meta.get("code") == 200:
-                for row in res.get("data", {}).get("otps", []):
-                    target_number = row.get("number")
-                    clean_target = re.sub(r"\D", "", target_number)
-                    for alloc_num, info in list(active_allocations.items()):
-                        if info.get("provider") == "voltx" and re.sub(r"\D", "", alloc_num) == clean_target:
+        info = active_allocations.get(alloc_key)
+        if not info:
+            break
+
+        provider = info.get("provider")
+
+        try:
+            if provider == "mknetwork" and mk_client:
+                res = await mk_client.check_status([alloc_key])
+                if res.get("meta", {}).get("code") == 200:
+                    for row in res.get("data", {}).get("results", []):
+                        if row.get("status") == "success":
+                            await dispatch_otp(app, info, row.get("number"), row.get("otp_code", ""), row.get("operator", "Other"), row.get("full_sms", ""))
+                            active_allocations.pop(alloc_key, None)
+                            return
+                        elif row.get("status") in ["expired", "not_found"]:
+                            active_allocations.pop(alloc_key, None)
+                            return
+
+            elif provider == "zebra" and zebra:
+                res = await zebra.get_updates()
+                if res.get("meta", {}).get("code") == 0:
+                    for row in res.get("data", {}).get("rows", []):
+                        if row.get("number") == alloc_key:
+                            msg_text = row.get("message")
+                            code = extract_code(msg_text)
+                            await dispatch_otp(app, info, alloc_key, code, row.get("sender"), msg_text)
+
+            elif provider == "voltx" and voltx:
+                res = await voltx.get_success_otp()
+                if res.get("meta", {}).get("code") == 200:
+                    clean_target = re.sub(r"\D", "", alloc_key)
+                    for row in res.get("data", {}).get("otps", []):
+                        if re.sub(r"\D", "", row.get("number")) == clean_target:
                             msg_text = row.get("message")
                             code = extract_code(msg_text)
                             await dispatch_otp(app, info, f"+{clean_target}", code, "VoltX", msg_text)
-                            active_allocations.pop(alloc_num, None)
+                            active_allocations.pop(alloc_key, None)
+                            return
 
-
-async def check_slvirtual_updates(app):
-    if provider_semaphores["slvirtual"].locked():
-        return
-    async with provider_semaphores["slvirtual"]:
-        slv_rentals = [rental_id for rental_id, info in list(active_allocations.items()) if info.get("provider") == "slvirtual"]
-        if slv_rentals and slv_client:
-            for rental_id in slv_rentals:
-                res = await slv_client.check_status(rental_id)
+            elif provider == "slvirtual" and slv_client:
+                res = await slv_client.check_status(alloc_key)
                 if res.get("status") == "success":
                     data_row = res.get("data", {})
                     if data_row.get("status") == "RECEIVED":
-                        allocation_info = active_allocations.get(rental_id)
-                        if allocation_info:
-                            await dispatch_otp(app, allocation_info, data_row.get("phoneNumber"), data_row.get("otpCode"), data_row.get("service"), data_row.get("fullSms"))
-                            active_allocations.pop(rental_id, None)
+                        await dispatch_otp(app, info, data_row.get("phoneNumber"), data_row.get("otpCode"), data_row.get("service"), data_row.get("fullSms"))
+                        active_allocations.pop(alloc_key, None)
+                        return
 
-
-async def check_fastx_updates(app):
-    if provider_semaphores["fastx"].locked():
-        return
-    async with provider_semaphores["fastx"]:
-        fastx_numbers = [num for num, info in list(active_allocations.items()) if info.get("provider") == "fastx"]
-        if fastx_numbers and fastx_client:
-            res = await fastx_client.get_success_otp()
-            meta = res.get("meta", {})
-            if meta.get("code") == 200:
-                for row in res.get("data", {}).get("otps", []):
-                    target_number = row.get("number")
-                    clean_target = re.sub(r"\D", "", target_number)
-                    for alloc_num, info in list(active_allocations.items()):
-                        if info.get("provider") == "fastx" and re.sub(r"\D", "", alloc_num) == clean_target:
+            elif provider == "fastx" and fastx_client:
+                res = await fastx_client.get_success_otp()
+                if res.get("meta", {}).get("code") == 200:
+                    clean_target = re.sub(r"\D", "", alloc_key)
+                    for row in res.get("data", {}).get("otps", []):
+                        if re.sub(r"\D", "", row.get("number")) == clean_target:
                             msg_text = row.get("sms")
                             code = row.get("otp")
                             await dispatch_otp(app, info, f"+{clean_target}", code, row.get("platform", "FastX"), msg_text)
-                            active_allocations.pop(alloc_num, None)
+                            active_allocations.pop(alloc_key, None)
+                            return
+        except Exception as e:
+            logging.error(f"Error polling worker for {alloc_key}: {e}")
+
+        await asyncio.sleep(0.5)
+
+    active_worker_tasks.pop(alloc_key, None)
 
 
 async def auto_check_updates(app):
-    """Background polling loop launching non-blocking async tasks per provider."""
+    """Manager loop that spawns isolated worker tasks for each allocation key."""
     while True:
         try:
-            if active_allocations:
-                # Launch independent background tasks so one slow provider cannot block others
-                asyncio.create_task(check_mknetwork_updates(app))
-                asyncio.create_task(check_zebra_updates(app))
-                asyncio.create_task(check_voltx_updates(app))
-                asyncio.create_task(check_slvirtual_updates(app))
-                asyncio.create_task(check_fastx_updates(app))
+            current_keys = list(active_allocations.keys())
+            for key in current_keys:
+                if key not in active_worker_tasks or active_worker_tasks[key].done():
+                    active_worker_tasks[key] = asyncio.create_task(poll_single_allocation(app, key))
         except Exception as e:
-            logging.error(f"Error during auto-polling: {e}")
+            logging.error(f"Error in manager task loop: {e}")
 
         await asyncio.sleep(0.5)
 
@@ -1092,7 +1076,6 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
         allocated_results = []
 
-        # Request 3 numbers concurrently across all providers
         if chosen_provider == "mknetwork" and mk_client:
             tasks = [mk_client.get_number(selected_range) for _ in range(3)]
             responses = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1304,6 +1287,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def post_init(application):
+    application.create_task(dispatch_consumer_loop(application))
     application.create_task(auto_check_updates(application))
     application.create_task(fake_sms_generator_loop(application))
 
