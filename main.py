@@ -834,19 +834,14 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         matched_item = next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
         c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
 
-        if is_change:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            loading_msg = await context.bot.send_message(chat_id=chat_id, text=f"⏳ Requesting number for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
-        else:
-            await query.edit_message_text(f"⏳ Requesting number for {flag_icon} range `{selected_range}`...")
+        # Always edit the text directly to provide instant UI feedback
+        await query.edit_message_text(f"⏳ Requesting number for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
 
         allocated_results = []
 
-        # Request ONLY 1 number per request
+        # Request 1 number with a 0.5-second buffer to clear rapid API locks
         if slv_client:
+            await asyncio.sleep(0.5)
             res = await slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp"))
             if isinstance(res, dict) and res.get("status") == "success":
                 d = res.get("data", {})
@@ -887,16 +882,17 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             ]
             keyboard = InlineKeyboardMarkup(keyboard_layout)
 
-            if is_change:
-                await loading_msg.edit_text(msg, parse_mode="Markdown", reply_markup=keyboard)
-            else:
-                await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)
+            await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)
         else:
-            msg = f"❌ **Failed to allocate number.** Service currently out of stock."
-            if is_change:
-                await loading_msg.edit_text(msg, parse_mode="Markdown")
-            else:
-                await query.edit_message_text(msg, parse_mode="Markdown")
+            fallback_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Try Again", callback_data=data, style="success")],
+                [InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services", style="primary")]
+            ])
+            await query.edit_message_text(
+                f"❌ **Out of stock or API rate limit hit.** Tap below to try again or choose another service.",
+                parse_mode="Markdown",
+                reply_markup=fallback_keyboard
+            )
 
     elif data.startswith("refresh_2fa_"):
         secret = data.replace("refresh_2fa_", "")
@@ -1041,5 +1037,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running exclusively with SL Virtual provider (1 number per request)...")
+    print("🤖 Bot running exclusively with SL Virtual provider (1 number per request + fixed change button)...")
     app.run_polling()
