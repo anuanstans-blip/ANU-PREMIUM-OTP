@@ -361,7 +361,7 @@ COUNTRY_FLAG_MAP = {
 
     # Oceania
     "australia": ("Australia", "🇦🇺"), "61": ("Australia", "🇦🇺"),
-    "fiji": ("Fiji", "🇫FJ"), "679": ("Fiji", "🇫🇯"),
+    "fiji": ("Fiji", "🇫🇯"), "679": ("Fiji", "🇫🇯"),
     "kiribati": ("Kiribati", "🇰🇮"), "686": ("Kiribati", "🇰🇮"),
     "marshall islands": ("Marshall Islands", "🇲🇭"), "692": ("Marshall Islands", "🇲🇭"),
     "micronesia": ("Micronesia", "🇫🇲"), "691": ("Micronesia", "🇫🇲"),
@@ -834,12 +834,15 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         matched_item = next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
         c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
 
-        # Edit message in-place to update the existing view
-        await query.edit_message_text(f"⏳ Requesting number for {flag_icon} range `{selected_range}`...", parse_mode="Markdown")
+        # Send a new loading message at the bottom of the chat view
+        loading_msg = await context.bot.send_message(
+            chat_id=chat_id, 
+            text=f"⏳ Requesting fresh number for {flag_icon} range `{selected_range}`...", 
+            parse_mode="Markdown"
+        )
 
         allocated_results = []
 
-        # Request 1 number with a 0.5-second buffer to clear rapid API locks
         if slv_client:
             await asyncio.sleep(0.5)
             res = await slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp"))
@@ -882,13 +885,13 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             ]
             keyboard = InlineKeyboardMarkup(keyboard_layout)
 
-            await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)
+            await loading_msg.edit_text(msg, parse_mode="Markdown", reply_markup=keyboard)
         else:
             fallback_keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Try Again", callback_data=data, style="success")],
                 [InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services", style="primary")]
             ])
-            await query.edit_message_text(
+            await loading_msg.edit_text(
                 f"❌ **Out of stock or API rate limit hit.** Tap below to try again or choose another service.",
                 parse_mode="Markdown",
                 reply_markup=fallback_keyboard
@@ -1037,5 +1040,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with fixed in-place message editing for Change Number button...")
+    print("🤖 Bot running with bottom message posting for allocated numbers...")
     app.run_polling()
