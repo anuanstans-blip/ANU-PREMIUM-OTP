@@ -444,7 +444,7 @@ def extract_code(message_text: str) -> str:
     return match.group(0) if match else "No code found"
 
 
-# --- API Clients ---
+# --- API Clients with Persistent Session Pools ---
 
 class MKNetworkClient:
     def __init__(self, api_key: str):
@@ -453,32 +453,29 @@ class MKNetworkClient:
             "mknetwork-key": api_key,
             "Content-Type": "application/json",
         }
+        self.client = httpx.AsyncClient(timeout=8.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
 
     async def get_number(self, range_val: str) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/getnum/number",
-                    headers=self.headers,
-                    json={"range": range_val},
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/getnum/number",
+                headers=self.headers,
+                json={"range": range_val},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
 
     async def check_status(self, request_ids: list) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/check/status",
-                    headers=self.headers,
-                    json={"request_ids": request_ids},
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/check/status",
+                headers=self.headers,
+                json={"request_ids": request_ids},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
 
 
 class ZebraSMSClient:
@@ -488,45 +485,28 @@ class ZebraSMSClient:
             "MAuth": api_key,
             "Content-Type": "application/json",
         }
+        self.client = httpx.AsyncClient(timeout=8.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
 
     async def get_number(self, range_val: str) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/publicapi/getnum",
-                    headers=self.headers,
-                    json={"range": range_val},
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "error": str(e)}}
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/publicapi/getnum",
+                headers=self.headers,
+                json={"range": range_val},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "error": str(e)}}
 
     async def get_updates(self) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/publicapi/getupdate",
-                    headers=self.headers,
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "error": str(e)}}
-
-    async def get_live_access(self, sender: str = None) -> dict:
-        params = {"sender": sender} if sender else {}
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/publicapi/liveaccess",
-                    headers=self.headers,
-                    params=params,
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "error": str(e)}}
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/publicapi/getupdate",
+                headers=self.headers,
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "error": str(e)}}
 
 
 class VoltXSMSClient:
@@ -536,43 +516,28 @@ class VoltXSMSClient:
             "mauthapi": api_key,
             "Content-Type": "application/json",
         }
+        self.client = httpx.AsyncClient(timeout=8.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
 
     async def get_number(self, rid: str) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/getnum",
-                    headers=self.headers,
-                    json={"rid": rid},
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/getnum",
+                headers=self.headers,
+                json={"rid": rid},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
 
     async def get_success_otp(self) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/success-otp",
-                    headers=self.headers,
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
-
-    async def get_live_access(self) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/liveaccess",
-                    headers=self.headers,
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/success-otp",
+                headers=self.headers,
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
 
 
 class SLVirtualNumberClient:
@@ -582,53 +547,32 @@ class SLVirtualNumberClient:
             "X-API-KEY": api_key,
             "Content-Type": "application/json",
         }
+        self.client = httpx.AsyncClient(follow_redirects=True, timeout=8.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
 
     async def get_number(self, range_val: str, service: str = "WhatsApp") -> dict:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/api/v1/developer/rent",
-                    headers=self.headers,
-                    json={"rangePrefix": range_val, "service": service},
-                    timeout=10.0,
-                )
-                if response.status_code != 200:
-                    return {"status": "error", "message": f"HTTP {response.status_code}: {response.text[:100]}"}
-                return response.json()
-            except Exception as e:
-                return {"status": "error", "message": str(e)}
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/developer/rent",
+                headers=self.headers,
+                json={"rangePrefix": range_val, "service": service},
+            )
+            if response.status_code != 200:
+                return {"status": "error", "message": f"HTTP {response.status_code}"}
+            return response.json()
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     async def check_status(self, rental_id: str) -> dict:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/api/v1/developer/check-otp/{rental_id}",
-                    headers=self.headers,
-                    timeout=10.0,
-                )
-                if response.status_code != 200:
-                    return {"status": "error", "message": f"HTTP {response.status_code}"}
-                return response.json()
-            except Exception as e:
-                return {"status": "error", "message": str(e)}
-
-    async def get_otp_monitor(self, limit: int = 100, service: str = None) -> dict:
-        params = {"limit": limit}
-        if service:
-            params["service"] = service
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/api/v1/developer/otp-monitor",
-                    headers=self.headers,
-                    params=params,
-                    timeout=10.0,
-                )
-                if response.status_code != 200:
-                    return {"status": "error", "message": f"HTTP {response.status_code}"}
-                return response.json()
-            except Exception as e:
-                return {"status": "error", "message": str(e)}
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/api/v1/developer/check-otp/{rental_id}",
+                headers=self.headers,
+            )
+            if response.status_code != 200:
+                return {"status": "error", "message": f"HTTP {response.status_code}"}
+            return response.json()
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
 
 class FastXClient:
@@ -638,31 +582,28 @@ class FastXClient:
             "X-API-Key": api_key,
             "Content-Type": "application/json",
         }
+        self.client = httpx.AsyncClient(timeout=8.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
 
     async def get_number(self, range_val: str) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/api/getnum",
-                    headers=self.headers,
-                    json={"range": range_val},
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/getnum",
+                headers=self.headers,
+                json={"range": range_val},
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
 
     async def get_success_otp(self) -> dict:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.base_url}/api/success-otp-info",
-                    headers=self.headers,
-                    timeout=10.0,
-                )
-                return response.json()
-            except Exception as e:
-                return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/api/success-otp-info",
+                headers=self.headers,
+            )
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "status": "error"}, "message": str(e)}
 
 
 mk_client = MKNetworkClient(MKNETWORK_API_KEY) if MKNETWORK_API_KEY else None
