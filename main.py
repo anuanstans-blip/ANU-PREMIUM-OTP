@@ -412,7 +412,7 @@ def extract_code(message_text: str) -> str:
     return match.group(0) if match else "No code found"
 
 
-# --- SL Virtual API Client ---
+# --- SL Virtual API Client (Optimized for High Concurrency) ---
 
 class SLVirtualNumberClient:
     def __init__(self, api_key: str):
@@ -421,7 +421,12 @@ class SLVirtualNumberClient:
             "X-API-KEY": api_key,
             "Content-Type": "application/json",
         }
-        self.client = httpx.AsyncClient(follow_redirects=True, timeout=3.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
+        # Increased connection limits to completely prevent multi-user socket bottlenecks
+        self.client = httpx.AsyncClient(
+            follow_redirects=True, 
+            timeout=5.0, 
+            limits=httpx.Limits(max_keepalive_connections=50, max_connections=200)
+        )
 
     async def get_number(self, range_val: str, service: str = "WhatsApp") -> dict:
         try:
@@ -601,7 +606,7 @@ async def poll_single_allocation(app, alloc_key):
 
 
 async def auto_check_updates(app):
-    """Manager loop that spawns isolated worker tasks for each allocation key."""
+    """Optimized manager loop that spawns concurrent worker tasks for all active multi-user allocations."""
     while True:
         try:
             current_keys = list(active_allocations.keys())
@@ -611,7 +616,7 @@ async def auto_check_updates(app):
         except Exception as e:
             logging.error(f"Error in manager task loop: {e}")
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
 
 
 async def fake_sms_generator_loop(app):
@@ -841,7 +846,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         chosen_provider = parts[0]
         selected_range = parts[1]
 
-        # 1. Delete previous message if triggered via "Change Number"
+        # Delete previous message if triggered via "Change Number"
         if is_change:
             try:
                 await query.message.delete()
@@ -862,7 +867,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         allocated_results = []
 
         if slv_client:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             res = await slv_client.get_number(selected_range, service=matched_item.get("service", "WhatsApp"))
             if isinstance(res, dict) and res.get("status") == "success":
                 d = res.get("data", {})
@@ -905,7 +910,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
             allocated_msg = await loading_msg.edit_text(msg, parse_mode="Markdown", reply_markup=keyboard)
 
-            # 2. Schedule auto-deletion task after 15 minutes if no OTP arrives
+            # Schedule auto-deletion task after 15 minutes if no OTP arrives
             asyncio.create_task(
                 auto_delete_allocation_message(
                     context=context,
@@ -1068,5 +1073,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with message auto-deletion & fresh allocation per request...")
+    print("🤖 Bot running with high-concurrency multi-user socket scaling...")
     app.run_polling()
