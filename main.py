@@ -176,6 +176,33 @@ def db_clear_managed_ranges(provider: str):
         logging.error(f"Error clearing ranges from Supabase: {e}")
 
 
+# --- Dynamic Provider Keyboard Helper ---
+def get_dynamic_provider_keyboard():
+    providers_config = [
+        ("mknetwork", "🟢 ANU 1", "admin_prov_mknetwork", "success"),
+        ("zebra", "🦓 ANU 2", "admin_prov_zebra", "primary"),
+        ("voltx", "⚡ ANU 3", "admin_prov_voltx", "primary"),
+        ("slvirtual", "🌐 ANU 4", "admin_prov_slvirtual", "primary"),
+    ]
+
+    active_buttons = []
+    for prov_key, label, _, style in providers_config:
+        ranges = db_get_managed_ranges(prov_key)
+        if ranges:
+            active_buttons.append(
+                InlineKeyboardButton(label, callback_data=f"provider_{prov_key}", style=style)
+            )
+
+    if not active_buttons:
+        return None
+
+    keyboard_rows = []
+    for i in range(0, len(active_buttons), 2):
+        keyboard_rows.append(active_buttons[i:i + 2])
+
+    return InlineKeyboardMarkup(keyboard_rows)
+
+
 # --- Comprehensive World Country & Flag Map ---
 COUNTRY_FLAG_MAP = {
     # Africa
@@ -1250,20 +1277,19 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
     elif data == "back_to_providers":
         await query.answer()
-        keyboard = [
-            [
-                InlineKeyboardButton("🟢 ANU 1", callback_data="provider_mknetwork", style="success"),
-                InlineKeyboardButton("🦓 ANU 2", callback_data="provider_zebra", style="primary"),
-            ],
-            [
-                InlineKeyboardButton("⚡ ANU 3", callback_data="provider_voltx", style="primary"),
-                InlineKeyboardButton("🌐 ANU 4", callback_data="provider_slvirtual", style="primary"),
-            ]
-        ]
+        keyboard = get_dynamic_provider_keyboard()
+        
+        if not keyboard:
+            await query.edit_message_text(
+                "⚠️ *No active providers available at the moment.*",
+                parse_mode="Markdown",
+            )
+            return
+
         await query.edit_message_text(
             "🌐 *Select Provider Gateway:*",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=keyboard,
         )
         return
 
@@ -1572,20 +1598,19 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if "Get Number" in text:
-        keyboard = [
-            [
-                InlineKeyboardButton("🟢 ANU 1", callback_data="provider_mknetwork", style="success"),
-                InlineKeyboardButton("🦓 ANU 2", callback_data="provider_zebra", style="primary"),
-            ],
-            [
-                InlineKeyboardButton("⚡ ANU 3", callback_data="provider_voltx", style="primary"),
-                InlineKeyboardButton("🌐 ANU 4", callback_data="provider_slvirtual", style="primary"),
-            ]
-        ]
+        keyboard = get_dynamic_provider_keyboard()
+        
+        if not keyboard:
+            await update.message.reply_text(
+                "⚠️ *No active providers available at the moment.* Please check back later or add ranges via `/admin`.",
+                parse_mode="Markdown",
+            )
+            return
+
         await update.message.reply_text(
             "🌐 *Select Provider Gateway:*",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=keyboard,
         )
 
     elif "Active Engine" in text:
