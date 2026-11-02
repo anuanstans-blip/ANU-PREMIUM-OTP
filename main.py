@@ -579,17 +579,22 @@ async def dispatch_consumer_loop(app):
             if CHANNEL_CHAT_ID:
                 masked_num = mask_phone_number(target_number)
                 channel_text = (
-                    "📢 *ANU OTP RECEIVED*\n\n"
+                    "📢 * ⒶⓃⓊ ⓄⓉⓅ Ⓡⓔⓒⓔⓘⓥⓔⓓ*\n\n"
                     f"📱 *To Number:* `{masked_num}`\n"
                     f"{flag_icon} *Country:* {country_name}\n"
                     f"🏷 *Batch Tag:* `{tag_name}`\n"
                     f"👤 *Sender:* `{sender}`\n"
                     f"💬 *Full Message:* `{msg_text}`"
                 )
-                channel_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))],
-                    [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")]
-                ])
+                  channel_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"📋 Copy OTP: {code}", copy_text=CopyTextButton(text=str(code))),
+                InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot")
+            ],
+            [
+                InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")
+            ]
+        ])
                 try:
                     await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                 except Exception as err:
