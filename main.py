@@ -406,7 +406,7 @@ def auto_detect_country_and_flag(country_text: str, phone_or_range: str) -> tupl
 def mask_phone_number(phone: str) -> str:
     digits = re.sub(r"\D", "", phone)
     if len(digits) >= 9:
-        return f"{digits[:3]}{digits[3:6]}ANU{digits[-2:]}"
+        return f"{digits[:3]}{digits[3:6]}ⒶⓃⓊ{digits[-2:]}"
     elif len(digits) >= 6:
         return f"{digits[:3]}ANU{digits[-2:]}"
     return phone
@@ -501,7 +501,7 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     masked_num = mask_phone_number(dummy_number)
 
     dm_text = (
-        "📩 *[TEST] ANU OTP Received!*\n\n"
+        "📩 *[TEST] ⒶⓃⓊ ⓄⓉⓅ Ⓡⓔⓒⓔⓘⓥⓔⓓ!*\n\n"
         f"📱 *To Number:* `{dummy_number}`\n"
         f"👤 *Sender:* `{dummy_sender}`\n"
         f"🔑 *Code:* `{code}`"
@@ -513,7 +513,7 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if CHANNEL_CHAT_ID:
         channel_text = (
-            "📢 *ANU OTP Received*\n\n"
+            "📢 *ⒶⓃⓊ ⓄⓉⓅ Ⓡⓔⓒⓔⓘⓥⓔⓓ*\n\n"
             f"📱 *To Number:* `{masked_num}`\n"
             f"{flag_icon} *Country:* {country_name}\n"
             f"👤 *Sender:* `{dummy_sender}`\n"
@@ -565,8 +565,6 @@ async def dispatch_consumer_loop(app):
             dm_text = (
                 f"📩 *Hey {user_fname}, your OTP has arrived!*\n\n"
                 f"📱 *To Number:* `{target_number}`\n"
-                f"👤 *Sender:* `{sender}`\n"
-                f"🔑 *Code:* `{otp_code}`\n"
             )
             
             dm_keyboard = InlineKeyboardMarkup([
