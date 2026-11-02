@@ -146,7 +146,7 @@ def db_add_managed_range(service: str, country: str, flag: str, range_val: str, 
             "tag": tag,
             "provider": provider,
         }
-        # Updated conflict resolution to include 'tag'
+        # Updated conflict resolution to include 'tag' for multi-tag/range support
         supabase.table("managed_ranges").upsert(data, on_conflict="service, range, tag").execute()
     except Exception as e:
         logging.error(f"Error inserting range to Supabase: {e}")
@@ -417,7 +417,7 @@ def extract_code(message_text: str) -> str:
     return match.group(0) if match else "No code found"
 
 
-# --- SL Virtual API Client (Updated to match v1.0.0 Stable API Specs with Tag Support) ---
+# --- SL Virtual API Client (Updated with Country Code & Tag Support) ---
 
 class SLVirtualNumberClient:
     def __init__(self, api_key: str):
@@ -432,11 +432,13 @@ class SLVirtualNumberClient:
             limits=httpx.Limits(max_keepalive_connections=50, max_connections=200)
         )
 
-    async def get_number(self, range_val: str, service: str = "WhatsApp", tag: str = None) -> dict:
+    async def get_number(self, range_val: str, service: str = "WhatsApp", tag: str = None, country_code: str = None) -> dict:
         try:
             payload = {"rangePrefix": range_val, "service": service}
             if tag:
                 payload["tag"] = tag
+            if country_code:
+                payload["countryCode"] = country_code
 
             response = await self.client.post(
                 f"{self.base_url}/api/v1/developer/rent",
@@ -504,7 +506,10 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 *Sender:* `{dummy_sender}`\n"
         f"🔑 *Code:* `{code}`"
     )
-    await update.message.reply_text(dm_text, parse_mode="Markdown")
+    copy_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📋 Copy OTP: {code}", copy_text=CopyTextButton(text=str(code)))]
+    ])
+    await update.message.reply_text(dm_text, parse_mode="Markdown", reply_markup=copy_keyboard)
 
     if CHANNEL_CHAT_ID:
         channel_text = (
@@ -516,11 +521,11 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         channel_keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton(f"📋 Copy OTP: {code}", callback_data=f"copy_otp_{code}", style="success"),
-                InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot", style="primary")
+                InlineKeyboardButton(f"📋 Copy OTP: {code}", copy_text=CopyTextButton(text=str(code))),
+                InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot")
             ],
             [
-                InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")
+                InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")
             ]
         ])
         try:
@@ -554,15 +559,22 @@ async def dispatch_consumer_loop(app):
             user_chat_id = allocation_info["chat_id"]
             country_name = allocation_info["country"]
             flag_icon = allocation_info["flag"]
+            user_fname = allocation_info.get("first_name", "User")
+            tag_name = allocation_info.get("tag", "Default")
 
             dm_text = (
-                "📩 *ANU OTP Received!*\n\n"
+                f"📩 *Hey {user_fname}, your OTP has arrived!*\n\n"
                 f"📱 *To Number:* `{target_number}`\n"
                 f"👤 *Sender:* `{sender}`\n"
                 f"🔑 *Code:* `{otp_code}`\n"
             )
+            
+            dm_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))]
+            ])
+
             try:
-                await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown")
+                await app.bot.send_message(chat_id=user_chat_id, text=dm_text, parse_mode="Markdown", reply_markup=dm_keyboard)
             except Exception as e:
                 logging.error(f"Error sending DM: {e}")
 
@@ -572,12 +584,13 @@ async def dispatch_consumer_loop(app):
                     "📢 *ANU OTP RECEIVED*\n\n"
                     f"📱 *To Number:* `{masked_num}`\n"
                     f"{flag_icon} *Country:* {country_name}\n"
+                    f"🏷 *Batch Tag:* `{tag_name}`\n"
                     f"👤 *Sender:* `{sender}`\n"
                     f"💬 *Full Message:* `{msg_text}`"
                 )
                 channel_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", callback_data=f"copy_otp_{otp_code}", style="success")],
-                    [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
+                    [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))],
+                    [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")]
                 ])
                 try:
                     await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
@@ -595,7 +608,7 @@ async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, ms
     await otp_dispatch_queue.put((allocation_info, target_number, otp_code, sender, msg_text))
 
 
-# --- Dedicated Worker Task Per Active Allocation ---
+# --- Dedicated Worker Task Per Active Allocation (Rate limit protected: 3.0s sleep) ---
 async def poll_single_allocation(app, alloc_key):
     """Dedicated background loop that polls only one allocated number until solved or expired."""
     start_time = asyncio.get_event_loop().time()
@@ -621,7 +634,8 @@ async def poll_single_allocation(app, alloc_key):
         except Exception as e:
             logging.error(f"Error polling worker for {alloc_key}: {e}")
 
-        await asyncio.sleep(0.5)
+        # Increased sleep duration to 3.0s to stay safely below SL Virtual's 160 req/min rate limit
+        await asyncio.sleep(3.0)
 
     active_worker_tasks.pop(alloc_key, None)
 
@@ -651,6 +665,7 @@ async def fake_sms_generator_loop(app):
                     app_name = chosen_range["service"].upper()
                     country_name = chosen_range["country"]
                     flag_icon = chosen_range["flag"]
+                    tag_name = chosen_range.get("tag", "Default")
                     range_prefix = re.sub(r"\D", "", chosen_range["range"])[:4]
                     
                     simulated_num = f"+{range_prefix}{''.join([str(random.randint(0, 9)) for _ in range(5)])}"
@@ -662,12 +677,13 @@ async def fake_sms_generator_loop(app):
                         "📢 *ANU OTP Received*\n\n"
                         f"📱 *To Number:* `{masked_num}`\n"
                         f"{flag_icon} *Country:* {country_name}\n"
+                        f"🏷 *Batch Tag:* `{tag_name}`\n"
                         f"👤 *Sender:* `{app_name}`\n"
                         f"💬 *Full Message:* `{msg_text}`"
                     )
                     channel_keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton(f"📋 Copy OTP: {otp}", callback_data=f"copy_otp_{otp}", style="success")],
-                        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans", style="primary")]
+                        [InlineKeyboardButton(f"📋 Copy OTP: {otp}", copy_text=CopyTextButton(text=str(otp)))],
+                        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")]
                     ])
                     try:
                         await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
@@ -679,9 +695,9 @@ async def fake_sms_generator_loop(app):
 
 def get_main_keyboard():
     keyboard = [
-        [KeyboardButton("📱 Get Number 🟢", style="success"), KeyboardButton("⚡ Active Engine ⚡", style="primary")],
-        [KeyboardButton("🌐 Live Feed 🔵", style="primary"), KeyboardButton("🎁 Referrals 🟡", style="success")],
-        [KeyboardButton("🔐 2FA Online 🟣", style="primary"), KeyboardButton("🎧 Support Hub 🔴", style="danger")],
+        [KeyboardButton("📱 Get Number 🟢"), KeyboardButton("⚡ Active Engine ⚡")],
+        [KeyboardButton("🌐 Live Feed 🔵"), KeyboardButton("🎁 Referrals 🟡")],
+        [KeyboardButton("🔐 2FA Online 🟣"), KeyboardButton("🎧 Support Hub 🔴")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -694,11 +710,11 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton("🌐 SL Virtual", callback_data="admin_prov_slvirtual", style="success"),
-            InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake", style="primary"),
+            InlineKeyboardButton("🌐 SL Virtual", callback_data="admin_prov_slvirtual"),
+            InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
         ],
         [
-            InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast", style="primary"),
+            InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
         ]
     ]
 
@@ -736,12 +752,12 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         keyboard = [
             [
-                InlineKeyboardButton("➕ Add Range 🟢", callback_data=f"admin_add_{prov}", style="success"),
-                InlineKeyboardButton("🗑 Delete Range 🔴", callback_data=f"admin_del_select_{prov}", style="danger"),
+                InlineKeyboardButton("➕ Add Range 🟢", callback_data=f"admin_add_{prov}"),
+                InlineKeyboardButton("🗑 Delete Range 🔴", callback_data=f"admin_del_select_{prov}"),
             ],
             [
-                InlineKeyboardButton("⚠️ Clear All 🟠", callback_data=f"admin_clear_{prov}", style="danger"),
-                InlineKeyboardButton("🔙 Back", callback_data="admin_back_main", style="primary")
+                InlineKeyboardButton("⚠️ Clear All 🟠", callback_data=f"admin_clear_{prov}"),
+                InlineKeyboardButton("🔙 Back", callback_data="admin_back_main")
             ]
         ]
         await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -751,11 +767,11 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer()
         keyboard = [
             [
-                InlineKeyboardButton("🌐 SL Virtual", callback_data="admin_prov_slvirtual", style="success"),
-                InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake", style="primary"),
+                InlineKeyboardButton("🌐 SL Virtual", callback_data="admin_prov_slvirtual"),
+                InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
             ],
             [
-                InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast", style="primary"),
+                InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
             ]
         ]
         fake_status = "🟢 ON" if fake_otp_settings["enabled"] else "🔴 OFF"
@@ -786,14 +802,13 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         keyboard = [
-            [InlineKeyboardButton(f"❌ Delete {r['flag']} {r['service']} ({r['range']}) [{r.get('tag', '')}] 🔴", callback_data=f"admin_del_{r['service']}_{r['range']}", style="danger")]
+            [InlineKeyboardButton(f"❌ Delete {r['flag']} {r['service']} ({r['range']}) [{r.get('tag', '')}] 🔴", callback_data=f"admin_del_{r['service']}_{r['range']}")]
             for r in managed_ranges
         ]
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"admin_prov_{prov}", style="primary")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"admin_prov_{prov}")])
         await query.edit_message_text(f"🗑 **Select range to delete:**", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("admin_del_"):
-        # Format: admin_del_<service>_<range>
         parts = data.replace("admin_del_", "").split("_", 1)
         if len(parts) == 2:
             srv_to_del, range_to_del = parts[0], parts[1]
@@ -832,7 +847,6 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         selected_service = data.replace("get_srv_", "").strip()
         all_ranges = db_get_all_managed_ranges()
         
-        # Case-insensitive matching for the service name
         matching_ranges = [r for r in all_ranges if r["service"].upper() == selected_service.upper()]
 
         if not matching_ranges:
@@ -842,7 +856,8 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         country_buttons = [
             InlineKeyboardButton(
                 f"{r['flag']} {r['country']} ({r.get('tag', r['range'])})", 
-                callback_data=f"prov_{r['provider']}_{r['range']}", 
+                # Include tag in callback data so it's unique
+                callback_data=f"prov_{r['provider']}_{r['range']}_{r.get('tag', '')}", 
                 style="primary"
             )
             for r in matching_ranges
@@ -865,7 +880,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             return
 
         services = sorted(list(set(r["service"] for r in all_ranges)))
-        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}", style="success")] for srv in services]
+        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
         await query.edit_message_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
@@ -874,9 +889,11 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         is_change = data.startswith("change_")
         clean_data = data.replace("change_", "") if is_change else data.replace("prov_", "")
 
-        parts = clean_data.split("_", 1)
+        # Split data to handle provider, range, and tag safely
+        parts = clean_data.split("_", 2)
         chosen_provider = parts[0]
         selected_range = parts[1]
+        target_tag = parts[2] if len(parts) > 2 else ""
 
         if is_change:
             try:
@@ -885,7 +902,13 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 logging.error(f"Error deleting old number message: {e}")
 
         all_ranges = db_get_all_managed_ranges()
-        matched_item = next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
+        
+        # Match precisely by provider, range, AND tag
+        matched_item = next(
+            (r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider and r.get("tag", "") == target_tag), 
+            next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
+        )
+        
         c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
         stored_tag = matched_item.get("tag")
 
@@ -899,10 +922,14 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
         if slv_client:
             await asyncio.sleep(0.3)
+            # Detect 2-letter country code dynamically (e.g. "ET")
+            c_code = "ET" if "Ethiopia" in matched_item.get("country", "") else None
+            
             res = await slv_client.get_number(
                 range_val=selected_range, 
                 service=matched_item.get("service", "WhatsApp"), 
-                tag=stored_tag
+                tag=stored_tag,
+                country_code=c_code
             )
             if isinstance(res, dict) and res.get("status") == "success":
                 d = res.get("data", {})
@@ -924,6 +951,8 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                         "flag": final_flag,
                         "number": allocated_num,
                         "provider": chosen_provider,
+                        "first_name": rand_fname,
+                        "tag": stored_tag or "Default"
                     }
                     number_copy_buttons.append(
                         [InlineKeyboardButton(f"📱 {allocated_num}", copy_text=CopyTextButton(text=str(allocated_num)))]
@@ -939,8 +968,8 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             )
 
             keyboard_layout = number_copy_buttons + [
-                [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}", style="danger")],
-                [InlineKeyboardButton("📢 Open OTP Channel 🔵", url=CHANNEL_URL, style="primary")],
+                [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}")],
+                [InlineKeyboardButton("📢 Open OTP Channel 🔵", url=CHANNEL_URL)],
             ]
             keyboard = InlineKeyboardMarkup(keyboard_layout)
 
@@ -956,11 +985,11 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             )
         else:
             fallback_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Try Again", callback_data=data, style="success")],
-                [InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services", style="primary")]
+                [InlineKeyboardButton("🔄 Try Again", callback_data=data)],
+                [InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")]
             ])
             await loading_msg.edit_text(
-                f"❌ **WE LOVE YOU Specially If You are girl🤣.** Tap below to try again or choose another service.",
+                f"❌ **Out of stock or API rate limit hit.** Tap below to try again or choose another service.",
                 parse_mode="Markdown",
                 reply_markup=fallback_keyboard
             )
@@ -972,7 +1001,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             totp = pyotp.TOTP(secret)
             code = totp.now()
             remaining = 30 - (int(asyncio.get_event_loop().time()) % 30)
-            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret}", style="success")]])
+            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret}")]])
             await query.edit_message_text(f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s", parse_mode="Markdown", reply_markup=refresh_keyboard)
         except Exception:
             await query.edit_message_text("❌ Invalid 2FA secret key!")
@@ -1026,7 +1055,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             totp = pyotp.TOTP(secret_key)
             code = totp.now()
             remaining = 30 - (int(asyncio.get_event_loop().time()) % 30)
-            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret_key}", style="success")]])
+            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret_key}")]])
             await update.message.reply_text(f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s", parse_mode="Markdown", reply_markup=refresh_keyboard)
         except Exception:
             await update.message.reply_text("❌ Invalid 2FA secret key!", reply_markup=get_main_keyboard())
@@ -1064,7 +1093,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         services = sorted(list(set(r["service"] for r in all_ranges)))
-        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}", style="success")] for srv in services]
+        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
         await update.message.reply_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif "Active Engine" in text:
