@@ -677,17 +677,22 @@ async def fake_sms_generator_loop(app):
                     masked_num = mask_phone_number(simulated_num)
 
                     channel_text = (
-                        "📢 *ANU OTP Received*\n\n"
-                        f"📱 *To Number:* `{masked_num}`\n"
+                        "📢 *ⒶⓃⓊ ⓄⓉⓅ Ⓡⓔⓒⓔⓘⓥⓔⓓ*\n\n"
+                        f"📱 *To :* `{masked_num}`\n"
                         f"{flag_icon} *Country:* {country_name}\n"
                         f"🏷 *Batch Tag:* `{tag_name}`\n"
                         f"👤 *Sender:* `{app_name}`\n"
                         f"💬 *Full Message:* `{msg_text}`"
                     )
                     channel_keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton(f"📋 Copy OTP: {otp}", copy_text=CopyTextButton(text=str(otp)))],
-                        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")]
-                    ])
+            [
+                InlineKeyboardButton(f"📋 Copy OTP: {code}", copy_text=CopyTextButton(text=str(code))),
+                InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot")
+            ],
+            [
+                InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")
+            ]
+        ])
                     try:
                         await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                     except Exception as err:
