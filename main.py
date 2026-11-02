@@ -858,7 +858,13 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             await query.edit_message_text(f"⚠ No ranges found for service `{selected_service}`.", parse_mode="Markdown")
             return
 
-        country_buttons
+        country_buttons = [
+            InlineKeyboardButton(
+                f"{r['flag']} {r['country']} ({r.get('tag', r['range'])})", 
+                callback_data=f"prov_{r['provider']}_{r['range']}_{r.get('tag', '')}"
+            )
+            for r in matching_ranges
+        ]
         keyboard = [country_buttons[i:i + 2] for i in range(0, len(country_buttons), 2)]
         keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
