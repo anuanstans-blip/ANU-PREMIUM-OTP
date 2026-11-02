@@ -26,18 +26,25 @@ from telegram.ext import (
 )
 
 # --- Configuration via Environment Variables ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-CHANNEL_CHAT_ID = int(os.getenv("CHANNEL_CHAT_ID", "0"))
-CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip(" '\"")
 
-SLV_API_KEY = os.getenv("SLV_API_KEY")
-SLV_BASE_URL = os.getenv("SLV_BASE_URL", "https://slvirtualnumber.com")
+# Safely parse ADMIN_ID, removing any accidental quotes or spaces
+_admin_raw = os.getenv("ADMIN_ID", "0").strip(" '\"")
+ADMIN_ID = int(_admin_raw) if _admin_raw.isdigit() else 0
 
-SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans")
+# Safely parse CHANNEL_CHAT_ID (handling negative chat IDs for channels/groups)
+_channel_raw = os.getenv("CHANNEL_CHAT_ID", "0").strip(" '\"")
+CHANNEL_CHAT_ID = int(_channel_raw) if _channel_raw.lstrip("-").isdigit() else 0
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/").strip(" '\"")
+
+SLV_API_KEY = os.getenv("SLV_API_KEY", "").strip(" '\"")
+SLV_BASE_URL = os.getenv("SLV_BASE_URL", "https://slvirtualnumber.com").strip(" '\"")
+
+SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans").strip(" '\"")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip(" '\"")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip(" '\"")
 
 # Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
