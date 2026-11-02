@@ -563,8 +563,8 @@ async def dispatch_consumer_loop(app):
             tag_name = allocation_info.get("tag", "Default")
 
             dm_text = (
-                f"📩 *Hey {user_fname}, your OTP has arrived!*\n\n"
-                f"📱 *To Number:* `{target_number}`\n"
+                f"📩 *Hey {user_fname}, OTP!*\n\n"
+                f"📱 *:* `{target_number}`\n"
             )
             
             dm_keyboard = InlineKeyboardMarkup([
