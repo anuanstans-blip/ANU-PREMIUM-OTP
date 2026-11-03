@@ -1259,7 +1259,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 results = res.get("data", {}).get("results", [])
                 if results:
                     mk_results_text = "🌐 **MK Network Active Status:**\n\n" + "\n".join(
-                        [f"• 📱 `{mask_phone_number(r.get('number'))}` | 📌 Status: `{r.get('status')}`\n  🔑 Code: `{r.get('otp_code') or 'Waiting...'}`" for r in results]
+                        [f"• 📱 `{mask_phone_number(r.get('number'))}` | 📌 Status: `{r.get('status')}`\n 🔑 Code: `{r.get('otp_code') or 'Waiting...'}`" for r in results]
                     )
 
         zebra_results_text = ""
@@ -1270,7 +1270,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 rows = res.get("data", {}).get("rows", [])
                 if rows:
                     zebra_results_text = "🦓 **Zebra Recent Updates:**\n\n" + "\n".join(
-                        [f"• 📱 `{mask_phone_number(r.get('number'))}` | 👤 `{r.get('sender')}`\n  💬 `{r.get('message')}`" for r in rows[:3]]
+                        [f"• 📱 `{mask_phone_number(r.get('number'))}` | 👤 `{r.get('sender')}`\n 💬 `{r.get('message')}`" for r in rows[:3]]
                     )
 
         combined_reply = "\n\n".join([t for t in [mk_results_text, zebra_results_text] if t])
