@@ -38,8 +38,8 @@ CHANNEL_CHAT_ID = int(_channel_raw) if _channel_raw.lstrip("-").isdigit() else 0
 
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/").strip(" '\"")
 
-SLV_API_KEY = os.getenv("SLV_API_KEY", "").strip(" '\"")
-SLV_BASE_URL = os.getenv("SLV_BASE_URL", "https://slvirtualnumber.com").strip(" '\"")
+ZEBRASMS_API_KEY = os.getenv("ZEBRASMS_API_KEY", "Q32FDUSCCGF").strip(" '\"")
+ZEBRASMS_BASE_URL = os.getenv("ZEBRASMS_BASE_URL", "https://api.zebrasms.com/api/v1").strip(" '\"")
 
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans").strip(" '\"")
 
@@ -71,9 +71,9 @@ fake_otp_settings = {
     "interval": 15,
 }
 
-# Fallback default ranges for SL Virtual
-DEFAULT_RANGES_SLV = [
-    {"service": "WhatsApp", "country": "Italy", "flag": "🇮🇹", "range": "39324", "tag": "SLVN-ITA-1"},
+# Fallback default ranges for ZebraSMS
+DEFAULT_RANGES_ZEBRA = [
+    {"service": "WhatsApp", "country": "Ivory Coast", "flag": "🇨🇮", "range": "22501XXX", "provider": "zebrasms"},
 ]
 
 
@@ -118,7 +118,7 @@ def db_get_all_users() -> list:
 
 def db_get_managed_ranges(provider: str) -> list:
     if not supabase:
-        return DEFAULT_RANGES_SLV
+        return [r for r in DEFAULT_RANGES_ZEBRA if r.get("provider", "zebrasms") == provider]
     try:
         response = supabase.table("managed_ranges").select("*").eq("provider", provider).execute()
         if response.data:
@@ -130,9 +130,9 @@ def db_get_managed_ranges(provider: str) -> list:
 
 
 def db_get_all_managed_ranges() -> list:
-    """Retrieve all managed ranges for SL Virtual."""
+    """Retrieve all managed ranges for ZebraSMS."""
     if not supabase:
-        return [{**r, "provider": "slvirtual"} for r in DEFAULT_RANGES_SLV]
+        return DEFAULT_RANGES_ZEBRA
     try:
         response = supabase.table("managed_ranges").select("*").execute()
         return response.data if response.data else []
@@ -141,7 +141,7 @@ def db_get_all_managed_ranges() -> list:
         return []
 
 
-def db_add_managed_range(service: str, country: str, flag: str, range_val: str, tag: str, provider: str):
+def db_add_managed_range(service: str, country: str, flag: str, range_val: str, provider: str):
     if not supabase:
         return
     try:
@@ -150,11 +150,9 @@ def db_add_managed_range(service: str, country: str, flag: str, range_val: str, 
             "country": country,
             "flag": flag,
             "range": range_val,
-            "tag": tag,
             "provider": provider,
         }
-        # Updated conflict resolution to include 'tag' for multi-tag/range support
-        supabase.table("managed_ranges").upsert(data, on_conflict="service, range, tag").execute()
+        supabase.table("managed_ranges").upsert(data, on_conflict="service, range").execute()
     except Exception as e:
         logging.error(f"Error inserting range to Supabase: {e}")
 
@@ -424,13 +422,13 @@ def extract_code(message_text: str) -> str:
     return match.group(0) if match else "No code found"
 
 
-# --- SL Virtual API Client (Updated with Country Code & Tag Support) ---
+# --- ZebraSMS API Client ---
 
-class SLVirtualNumberClient:
+class ZebraSMSClient:
     def __init__(self, api_key: str):
-        self.base_url = SLV_BASE_URL.rstrip("/")
+        self.base_url = ZEBRASMS_BASE_URL.rstrip("/")
         self.headers = {
-            "X-API-KEY": api_key,
+            "MAuth": api_key,
             "Content-Type": "application/json",
         }
         self.client = httpx.AsyncClient(
@@ -439,52 +437,36 @@ class SLVirtualNumberClient:
             limits=httpx.Limits(max_keepalive_connections=50, max_connections=200)
         )
 
-    async def get_number(self, range_val: str, service: str = "WhatsApp", tag: str = None, country_code: str = None) -> dict:
+    async def get_number(self, range_val: str) -> dict:
         try:
-            payload = {"rangePrefix": range_val, "service": service}
-            if tag:
-                payload["tag"] = tag
-            if country_code:
-                payload["countryCode"] = country_code
-
+            payload = {"range": range_val}
             response = await self.client.post(
-                f"{self.base_url}/api/v1/developer/rent",
+                f"{self.base_url}/publicapi/getnum",
                 headers=self.headers,
                 json=payload,
             )
+            print(f"ZebraSMS getnum Response [{response.status_code}]: {response.text}")
             if response.status_code != 200:
-                return {"status": "error", "message": f"HTTP {response.status_code}"}
+                return {"meta": {"code": -500, "error": f"HTTP {response.status_code}"}}
             return response.json()
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            print(f"ZebraSMS getnum Exception: {e}")
+            return {"meta": {"code": -500, "error": str(e)}}
 
-    async def check_status(self, rental_id: str) -> dict:
+    async def get_updates(self) -> dict:
         try:
             response = await self.client.get(
-                f"{self.base_url}/api/v1/developer/check-otp/{rental_id}",
+                f"{self.base_url}/publicapi/getupdate",
                 headers=self.headers,
             )
             if response.status_code != 200:
-                return {"status": "error", "message": f"HTTP {response.status_code}"}
+                return {"meta": {"code": -500, "error": f"HTTP {response.status_code}"}}
             return response.json()
         except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-    async def get_balance(self) -> dict:
-        """Query account balance in USD ($) via the updated API endpoint."""
-        try:
-            response = await self.client.get(
-                f"{self.base_url}/api/v1/developer/balance",
-                headers=self.headers,
-            )
-            if response.status_code != 200:
-                return {"status": "error", "message": f"HTTP {response.status_code}"}
-            return response.json()
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+            return {"meta": {"code": -500, "error": str(e)}}
 
 
-slv_client = SLVirtualNumberClient(SLV_API_KEY) if SLV_API_KEY else None
+zebrasms_client = ZebraSMSClient(ZEBRASMS_API_KEY) if ZEBRASMS_API_KEY else None
 
 
 async def auto_delete_allocation_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, alloc_key: str):
@@ -499,10 +481,10 @@ async def auto_delete_allocation_message(context: ContextTypes.DEFAULT_TYPE, cha
 
 
 async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    dummy_number = "+393241234567"
+    dummy_number = "+225011234567"
     dummy_sender = "WHATSAPP"
     dummy_message = "<#> 123456 is your verification code"
-    country_name, flag_icon = auto_detect_country_and_flag("Italy", dummy_number)
+    country_name, flag_icon = auto_detect_country_and_flag("Ivory Coast", dummy_number)
 
     code = extract_code(dummy_message)
     masked_num = mask_phone_number(dummy_number)
@@ -567,7 +549,6 @@ async def dispatch_consumer_loop(app):
             country_name = allocation_info["country"]
             flag_icon = allocation_info["flag"]
             user_fname = allocation_info.get("first_name", "User")
-            tag_name = allocation_info.get("tag", "Default")
 
             dm_text = (
                 f"📩 *Hey {user_fname}, your OTP has arrived!*\n\n"
@@ -589,7 +570,6 @@ async def dispatch_consumer_loop(app):
                     "📢 *ANU OTP RECEIVED*\n\n"
                     f"📱 *To Number:* `{masked_num}`\n"
                     f"{flag_icon} *Country:* {country_name}\n"
-                    f"🏷 *Batch Tag:* `{tag_name}`\n"
                     f"👤 *Sender:* `{sender}`\n"
                     f"💬 *Full Message:* `{msg_text}`"
                 )
@@ -613,50 +593,32 @@ async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, ms
     await otp_dispatch_queue.put((allocation_info, target_number, otp_code, sender, msg_text))
 
 
-# --- Dedicated Worker Task Per Active Allocation (Rate limit protected: 3.0s sleep) ---
-async def poll_single_allocation(app, alloc_key):
-    """Dedicated background loop that polls only one allocated number until solved or expired."""
-    start_time = asyncio.get_event_loop().time()
-
-    while alloc_key in active_allocations:
-        if asyncio.get_event_loop().time() - start_time > 900:
-            active_allocations.pop(alloc_key, None)
-            break
-
-        info = active_allocations.get(alloc_key)
-        if not info:
-            break
-
-        try:
-            if slv_client:
-                res = await slv_client.check_status(alloc_key)
-                if res.get("status") == "success":
-                    data_row = res.get("data", {})
-                    if data_row.get("status") == "RECEIVED":
-                        await dispatch_otp(app, info, data_row.get("phoneNumber"), data_row.get("otpCode"), data_row.get("service"), data_row.get("fullSms"))
-                        active_allocations.pop(alloc_key, None)
-                        return
-        except Exception as e:
-            logging.error(f"Error polling worker for {alloc_key}: {e}")
-
-        # Increased sleep duration to 3.0s to stay safely below SL Virtual's 160 req/min rate limit
-        await asyncio.sleep(3.0)
-
-    active_worker_tasks.pop(alloc_key, None)
-
-
-async def auto_check_updates(app):
-    """Optimized manager loop that spawns concurrent worker tasks for all active multi-user allocations."""
+# --- Global Checker Loop polling getupdate for all active allocations ---
+async def global_zebrasms_poller(app):
+    """Polls ZebraSMS /publicapi/getupdate endpoint and dispatches messages to matching active allocations."""
     while True:
         try:
-            current_keys = list(active_allocations.keys())
-            for key in current_keys:
-                if key not in active_worker_tasks or active_worker_tasks[key].done():
-                    active_worker_tasks[key] = asyncio.create_task(poll_single_allocation(app, key))
-        except Exception as e:
-            logging.error(f"Error in manager task loop: {e}")
+            if zebrasms_client and active_allocations:
+                res = await zebrasms_client.get_updates()
+                if res.get("meta", {}).get("code") == 0:
+                    rows = res.get("data", {}).get("rows", [])
+                    for row in rows:
+                        target_num = row.get("number")
+                        msg_text = row.get("message", "")
+                        sender = row.get("sender", "UNKNOWN")
+                        otp_code = extract_code(msg_text)
 
-        await asyncio.sleep(0.3)
+                        # Check if this phone number matches any currently active user allocation
+                        for alloc_key, info in list(active_allocations.items()):
+                            if info.get("number") == target_num or info.get("number").replace("+", "") == target_num.replace("+", ""):
+                                await dispatch_otp(app, info, target_num, otp_code, sender, msg_text)
+                                # Remove allocation once code is captured/dispatched
+                                active_allocations.pop(alloc_key, None)
+        except Exception as e:
+            logging.error(f"Error in ZebraSMS global poller: {e}")
+
+        # Cached for 2 seconds per ZebraSMS docs, safe polling interval
+        await asyncio.sleep(2.0)
 
 
 async def fake_sms_generator_loop(app):
@@ -670,11 +632,10 @@ async def fake_sms_generator_loop(app):
                     app_name = chosen_range["service"].upper()
                     country_name = chosen_range["country"]
                     flag_icon = chosen_range["flag"]
-                    tag_name = chosen_range.get("tag", "Default")
-                    range_prefix = re.sub(r"\D", "", chosen_range["range"])[:4]
+                    range_prefix = re.sub(r"\D", "", chosen_range["range"])[:5]
                     
-                    simulated_num = f"+{range_prefix}{''.join([str(random.randint(0, 9)) for _ in range(5)])}"
-                    otp = str(random.randint(10000, 999999))
+                    simulated_num = f"+{range_prefix}{''.join([str(random.randint(0, 9)) for _ in range(6)])}"
+                    otp = str(random.randint(100000, 999999))
                     msg_text = f"<#> {otp} is your {app_name} verification code."
                     masked_num = mask_phone_number(simulated_num)
 
@@ -682,7 +643,6 @@ async def fake_sms_generator_loop(app):
                         "📢 *ANU OTP Received*\n\n"
                         f"📱 *To Number:* `{masked_num}`\n"
                         f"{flag_icon} *Country:* {country_name}\n"
-                        f"🏷 *Batch Tag:* `{tag_name}`\n"
                         f"👤 *Sender:* `{app_name}`\n"
                         f"💬 *Full Message:* `{msg_text}`"
                     )
@@ -715,7 +675,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton("🌐 SL Virtual", callback_data="admin_prov_slvirtual"),
+            InlineKeyboardButton("🦓 ZebraSMS", callback_data="admin_prov_zebrasms"),
             InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
         ],
         [
@@ -727,7 +687,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_msg = (
         f"🛠 **Admin Configuration Panel** 🛠\n\n"
         f"🧪 **Fake SMS Simulation:** {fake_status} (Interval: {fake_otp_settings['interval']}s)\n\n"
-        f"👇 *Select SL Virtual to manage ranges or toggle settings:*"
+        f"👇 *Select ZebraSMS to manage ranges or toggle settings:*"
     )
     await update.message.reply_text(admin_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -747,11 +707,11 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         managed_ranges = db_get_managed_ranges(prov)
 
         ranges_text = "\n".join(
-            [f"• {r['flag']} 🔹 **[{r['service']}]** {r['country']} (`{r['range']}`) 🏷 Tag: `{r.get('tag', 'N/A')}`" for r in managed_ranges]
+            [f"• {r['flag']} 🔹 **[{r['service']}]** {r['country']} (`{r['range']}`)" for r in managed_ranges]
         ) or "No active ranges configured."
 
         msg = (
-            f"🛠 **Admin Panel: SL Virtual** 🛠\n\n"
+            f"🛠 **Admin Panel: ZebraSMS** 🛠\n\n"
             f"📋 **Current Active Ranges:**\n{ranges_text}\n\n"
             f"👇 *Manage ranges below:*"
         )
@@ -772,7 +732,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer()
         keyboard = [
             [
-                InlineKeyboardButton("🌐 SL Virtual", callback_data="admin_prov_slvirtual"),
+                InlineKeyboardButton("🦓 ZebraSMS", callback_data="admin_prov_zebrasms"),
                 InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
             ],
             [
@@ -783,7 +743,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         admin_msg = (
             f"🛠 **Admin Configuration Panel** 🛠\n\n"
             f"🧪 **Fake SMS Simulation:** {fake_status} (Interval: {fake_otp_settings['interval']}s)\n\n"
-            f"👇 *Select SL Virtual to manage ranges or toggle settings:*"
+            f"👇 *Select ZebraSMS to manage ranges or toggle settings:*"
         )
         await query.edit_message_text(admin_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -793,7 +753,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data["waiting_for_range"] = prov
         context.user_data["waiting_for_broadcast"] = False
         await query.message.reply_text(
-            f"✍ **Send configuration for SL Virtual:**\n\n`Service | Country | Range | Tag`\n👉 *Example:* `FB | Ethiopia | 251 | SLVN-ETH-4`",
+            f"✍ **Send configuration for ZebraSMS:**\n\n`Service | Country | Range`\n👉 *Example:* `WhatsApp | Ivory Coast | 22501XXX`",
             parse_mode="Markdown",
         )
         await query.answer()
@@ -807,7 +767,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         keyboard = [
-            [InlineKeyboardButton(f"❌ Delete {r['flag']} {r['service']} ({r['range']}) [{r.get('tag', '')}] 🔴", callback_data=f"admin_del_{r['service']}_{r['range']}")]
+            [InlineKeyboardButton(f"❌ Delete {r['flag']} {r['service']} ({r['range']}) 🔴", callback_data=f"admin_del_{r['service']}_{r['range']}")]
             for r in managed_ranges
         ]
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"admin_prov_{prov}")])
@@ -838,8 +798,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data.startswith("admin_clear_"):
         prov = data.replace("admin_clear_", "")
         db_clear_managed_ranges(prov)
-        await query.answer("All SL Virtual ranges cleared!", show_alert=True)
-        await query.edit_message_text("🗑 **All configured SL Virtual ranges cleared.**")
+        await query.answer("All ZebraSMS ranges cleared!", show_alert=True)
+        await query.edit_message_text("🗑 **All configured ZebraSMS ranges cleared.**")
 
 
 async def user_provision_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -860,8 +820,8 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
         country_buttons = [
             InlineKeyboardButton(
-                f"{r['flag']} {r['country']} ({r.get('tag', r['range'])})", 
-                callback_data=f"prov_{r['provider']}_{r['range']}_{r.get('tag', '')}"
+                f"{r['flag']} {r['country']} ({r['range']})", 
+                callback_data=f"prov_{r.get('provider', 'zebrasms')}_{r['range']}"
             )
             for r in matching_ranges
         ]
@@ -869,7 +829,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
         await query.edit_message_text(
-            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country/Tag to allocate number:*",
+            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate number:*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -892,11 +852,9 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         is_change = data.startswith("change_")
         clean_data = data.replace("change_", "") if is_change else data.replace("prov_", "")
 
-        # Split data to handle provider, range, and tag safely
-        parts = clean_data.split("_", 2)
+        parts = clean_data.split("_", 1)
         chosen_provider = parts[0]
         selected_range = parts[1]
-        target_tag = parts[2] if len(parts) > 2 else ""
 
         if is_change:
             try:
@@ -905,38 +863,29 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 logging.error(f"Error deleting old number message: {e}")
 
         all_ranges = db_get_all_managed_ranges()
-        
-        # Match precisely by provider, range, AND tag
         matched_item = next(
-            (r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider and r.get("tag", "") == target_tag), 
-            next((r for r in all_ranges if r["range"] == selected_range and r["provider"] == chosen_provider), {})
+            (r for r in all_ranges if r["range"] == selected_range), 
+            {}
         )
         
         c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
-        stored_tag = matched_item.get("tag")
 
         loading_msg = await context.bot.send_message(
             chat_id=chat_id, 
-            text=f"⏳ Requesting fresh number for {flag_icon} range `{selected_range}` (Tag: `{stored_tag or 'Default'}`)...", 
+            text=f"⏳ Requesting fresh number for {flag_icon} range `{selected_range}`...", 
             parse_mode="Markdown"
         )
 
         allocated_results = []
 
-        if slv_client:
+        if zebrasms_client:
             await asyncio.sleep(0.3)
-            # Detect 2-letter country code dynamically (e.g. "ET")
-            c_code = "ET" if "Ethiopia" in matched_item.get("country", "") else None
-            
-            res = await slv_client.get_number(
-                range_val=selected_range, 
-                service=matched_item.get("service", "WhatsApp"), 
-                tag=stored_tag,
-                country_code=c_code
-            )
-            if isinstance(res, dict) and res.get("status") == "success":
-                d = res.get("data", {})
-                allocated_results.append((d.get("rentalId"), d.get("phoneNumber"), d.get("country")))
+            res = await zebrasms_client.get_number(range_val=selected_range)
+            if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
+                rows = res.get("data", {}).get("rows", [])
+                if rows:
+                    row = rows[0]
+                    allocated_results.append((row.get("number"), row.get("number"), row.get("country")))
 
         if allocated_results:
             first_entry = allocated_results[0]
@@ -955,7 +904,6 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                         "number": allocated_num,
                         "provider": chosen_provider,
                         "first_name": rand_fname,
-                        "tag": stored_tag or "Default"
                     }
                     number_copy_buttons.append(
                         [InlineKeyboardButton(f"📱 {allocated_num}", copy_text=CopyTextButton(text=str(allocated_num)))]
@@ -966,12 +914,11 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 f"👤 **First Name:** `{rand_fname}`\n"
                 f"👤 **Last Name:** `{rand_lname}`\n"
                 f"{final_flag} **Country:** {final_country_name}\n"
-                f"🏷 **Batch Tag:** `{stored_tag or 'Default'}`\n"
                 f"⏱ **Expires In:** ~15 mins"
             )
 
             keyboard_layout = number_copy_buttons + [
-                [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}_{stored_tag}")],
+                [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}")],
                 [InlineKeyboardButton("📢 Open OTP Channel 🔵", url=CHANNEL_URL)],
             ]
             keyboard = InlineKeyboardMarkup(keyboard_layout)
@@ -992,7 +939,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 [InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")]
             ])
             await loading_msg.edit_text(
-                f"❌ **Out of stock or API rate limit hit.** Tap below to try again or choose another service.",
+                f"❌ **Out of stock or API error hit.** Tap below to try again or choose another service.",
                 parse_mode="Markdown",
                 reply_markup=fallback_keyboard
             )
@@ -1067,23 +1014,22 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if context.user_data.get("waiting_for_range"):
         prov = context.user_data.get("waiting_for_range")
         
-        if text.count("|") not in [2, 3]:
-            await update.message.reply_text("⚠️ **Format Error!** Use: `Service | Country | Range | Tag`", parse_mode="Markdown")
+        if text.count("|") != 2:
+            await update.message.reply_text("⚠️ **Format Error!** Use: `Service | Country | Range`", parse_mode="Markdown")
             return
 
         parts = [p.strip() for p in text.split("|")]
         service = parts[0].upper()
         country = parts[1]
         range_val = parts[2]
-        tag_val = parts[3] if len(parts) == 4 else ""
 
         c_name, detected_flag = auto_detect_country_and_flag(country, range_val)
 
-        db_add_managed_range(service, c_name, detected_flag, range_val, tag_val, provider=prov)
+        db_add_managed_range(service, c_name, detected_flag, range_val, provider=prov)
         context.user_data["waiting_for_range"] = None
 
         await update.message.reply_text(
-            f"✅ **Successfully saved range & tag!**\n📌 Service: `{service}`\n{detected_flag} Country: `{c_name}`\n🔢 Range: `{range_val}`\n🏷 Tag: `{tag_val or 'None'}`",
+            f"✅ **Successfully saved range!**\n📌 Service: `{service}`\n{detected_flag} Country: `{c_name}`\n🔢 Range: `{range_val}`",
             parse_mode="Markdown",
             reply_markup=get_main_keyboard(),
         )
@@ -1124,7 +1070,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def post_init(application):
     application.create_task(dispatch_consumer_loop(application))
-    application.create_task(auto_check_updates(application))
+    application.create_task(global_zebrasms_poller(application))
     application.create_task(fake_sms_generator_loop(application))
 
 
@@ -1145,5 +1091,5 @@ if __name__ == "__main__":
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with high-concurrency multi-user socket scaling...")
+    print("🤖 Bot running with high-concurrency ZebraSMS integration...")
     app.run_polling()
