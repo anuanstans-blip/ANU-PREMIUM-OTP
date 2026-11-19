@@ -79,14 +79,14 @@ DEFAULT_RANGES_VOLTX = [
 # --- Name Generator Helper ---
 def generate_random_english_name() -> tuple[str, str]:
     first_names = [
-        "James", "Oliver", "Noah", "Liam", "Ethan", "Lucas", "Mason", "Logan",
-        "Emma", "Sophia", "Olivia", "Ava", "Mia", "Isabella", "Harper", "Evelyn",
-        "Alexander", "Benjamin", "Elijah", "William", "Charlotte", "Amelia", "Abigail"
+        "Teferi", "Bereket", "Jerry", "Ketema", "Mekdes", "Allancho", "Bergene", "Koroto",
+        "Emma", "Sophia", "Mewuded", "Alemtsehay", "Terefech", "Deginet", "Dagimawi", "Samuel",
+        "Alexander", "Benyam", "Engda", "balgo", "Tombe", "Bassa", "Desalegn"
     ]
     last_names = [
-        "Smith", "Johnson", "Williams", "Brown", "Jones", "Miller", "Davis",
-        "Wilson", "Taylor", "Anderson", "Thomas", "Jackson", "White", "Harris",
-        "Martin", "Thompson", "Garcia", "Martinez", "Robinson", "Clark", "Rodriguez"
+        "Bante", "Shemsu", "Timotewos", "Gawularo", "Tafese", "Gidoss", "Dawit",
+        "Workku", "Takele", "Andinet", "Tomas", "Jallen", "Wondimagegn", "Haile",
+        "Matewos", "Kinde", "Yohanis", "Markos", "Rahulo", "Cane", "Rodante"
     ]
     return random.choice(first_names), random.choice(last_names)
 
