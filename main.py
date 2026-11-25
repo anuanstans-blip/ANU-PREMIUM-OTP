@@ -1340,18 +1340,68 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["waiting_for_broadcast"] = False
         all_users = db_get_all_users() or [user_chat_id]
         status_msg = await update.message.reply_text(f"⏳ Sending broadcast to {len(all_users)} users...")
-        
+
         success, failed = 0, 0
+        header = "📢 ANNOUNCEMENT 📢\n\n"
+
         for uid in all_users:
             try:
-                if update.message.photo:
-                    await context.bot.send_photo(chat_id=uid, photo=update.message.photo[-1].file_id, caption=update.message.caption or "", parse_mode="HTML")
+                if update.message.text:
+                    # Preserve user's exact entities (bold, italic, mono, etc.) + prepend header
+                    orig_entities = list(update.message.entities or ())
+                    shifted_entities = [
+                        e for e in (
+                            type(ent)(
+                                offset=ent.offset + len(header),
+                                length=ent.length,
+                                type=ent.type,
+                                url=ent.url,
+                                user=ent.user,
+                                language=ent.language,
+                                custom_emoji_id=ent.custom_emoji_id,
+                            )
+                            for ent in orig_entities
+                        )
+                    ]
+                    await context.bot.send_message(
+                        chat_id=uid,
+                        text=f"{header}{update.message.text}",
+                        entities=shifted_entities,
+                        reply_markup=update.message.reply_markup,
+                    )
                 else:
-                    await context.bot.send_message(chat_id=uid, text=f"📢 **ANNOUNCEMENT** 📢\n\n{update.message.text}", parse_mode="Markdown")
+                    # Handles photo, video, document, audio, voice, animation, etc.
+                    # along with caption_entities (bold, italic, mono in captions)
+                    await update.message.copy(
+                        chat_id=uid,
+                        caption=f"{header}{update.message.caption}" if update.message.caption else None,
+                        caption_entities=(
+                            [
+                                type(ent)(
+                                    offset=ent.offset + len(header),
+                                    length=ent.length,
+                                    type=ent.type,
+                                    url=ent.url,
+                                    user=ent.user,
+                                    language=ent.language,
+                                    custom_emoji_id=ent.custom_emoji_id,
+                                )
+                                for ent in (update.message.caption_entities or ())
+                            ]
+                            if update.message.caption
+                            else None
+                        ),
+                        reply_markup=update.message.reply_markup,
+                    )
                 success += 1
-            except Exception:
+            except Exception as e:
+                logging.error(f"Broadcast failed for user {uid}: {e}")
                 failed += 1
-        await status_msg.edit_text(f"✅ **Broadcast Completed!**\nSuccessful: `{success}`\n❌ Failed: `{failed}`", parse_mode="Markdown")
+
+        await status_msg.edit_text(
+            f"✅ **Broadcast Completed!**\nSuccessful: `{success}`\n❌ Failed: `{failed}`",
+            parse_mode="Markdown",
+        )
         return
 
     text = update.message.text.strip() if update.message.text else ""
