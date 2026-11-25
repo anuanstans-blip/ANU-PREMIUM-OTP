@@ -4,6 +4,7 @@ import os
 import re
 import random
 import json
+import time
 import pyotp
 import httpx
 from keep_alive import keep_alive
@@ -70,6 +71,15 @@ fake_otp_settings = {
     "enabled": False,
     "interval": 15,
 }
+
+# Auto-Ranging Cache & Background Refresh State
+LIVEACCESS_CACHE_TTL_SECONDS = 45.0
+LIVEACCESS_REFRESH_INTERVAL_SECONDS = 30.0
+_liveaccess_cache = {
+    "ranges": [],
+    "updated_at": 0.0,
+}
+_liveaccess_lock = asyncio.Lock()
 
 # Fallback default ranges for ZebraSMS
 DEFAULT_RANGES_ZEBRA = [
@@ -856,7 +866,7 @@ class ZebraSMSClient:
 zebrasms_client = ZebraSMSClient(ZEBRASMS_API_KEY) if ZEBRASMS_API_KEY else None
 
 
-async def get_live_and_managed_ranges() -> list:
+async def _build_live_and_managed_ranges() -> list:
     """
     Combines saved DB/fallback ranges with live /publicapi/liveaccess ranges:
     - Only includes active social media / messaging sender IDs.
@@ -909,9 +919,11 @@ async def get_live_and_managed_ranges() -> list:
         )
 
     # 2. Merge live delivering ranges from /publicapi/liveaccess
+    fetched_live_ok = False
     if zebrasms_client:
         res = await zebrasms_client.get_live_access()
         if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
+            fetched_live_ok = True
             rows = res.get("data", {}).get("rows", []) or []
             live_added = 0
             for row in rows:
@@ -937,7 +949,50 @@ async def get_live_and_managed_ranges() -> list:
     combined = []
     for ranges_list in per_sender_ranges.values():
         combined.extend(ranges_list)
+
+    if fetched_live_ok and combined:
+        _liveaccess_cache["ranges"] = combined
+        _liveaccess_cache["updated_at"] = time.monotonic()
+
     return combined
+
+
+async def get_live_and_managed_ranges(force_refresh: bool = False) -> list:
+    """Returns cached live + managed ranges, refreshing when stale or using stale cache on transient errors."""
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _liveaccess_cache["ranges"]
+        and (now - _liveaccess_cache["updated_at"]) < LIVEACCESS_CACHE_TTL_SECONDS
+    ):
+        return _liveaccess_cache["ranges"]
+
+    async with _liveaccess_lock:
+        now = time.monotonic()
+        if (
+            not force_refresh
+            and _liveaccess_cache["ranges"]
+            and (now - _liveaccess_cache["updated_at"]) < LIVEACCESS_CACHE_TTL_SECONDS
+        ):
+            return _liveaccess_cache["ranges"]
+
+        fresh = await _build_live_and_managed_ranges()
+        if fresh:
+            return fresh
+        if _liveaccess_cache["ranges"]:
+            logging.warning("[liveaccess] Falling back to cached ranges after empty/error response.")
+            return _liveaccess_cache["ranges"]
+        return fresh
+
+
+async def liveaccess_auto_refresh_loop():
+    """Periodically refreshes auto-ranging cache in the background."""
+    while True:
+        try:
+            await get_live_and_managed_ranges(force_refresh=True)
+        except Exception as e:
+            logging.error(f"Error in liveaccess auto-refresh loop: {e}")
+        await asyncio.sleep(LIVEACCESS_REFRESH_INTERVAL_SECONDS)
 
 
 async def build_channel_keyboard(bot, otp_code: str, include_bot_button: bool = True) -> InlineKeyboardMarkup:
@@ -1632,6 +1687,7 @@ async def _start_background_workers(application) -> None:
     application.create_task(dispatch_consumer_loop(application))
     application.create_task(global_zebrasms_poller(application))
     application.create_task(fake_sms_generator_loop(application))
+    application.create_task(liveaccess_auto_refresh_loop())
 
 
 async def post_init(application):
