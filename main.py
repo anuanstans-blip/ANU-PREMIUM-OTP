@@ -1598,10 +1598,35 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(f"🎧 **Support Hub**\n\nContact support agent directly {SUPPORT_USERNAME}", parse_mode="Markdown")
 
 
-async def post_init(application):
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, Exception) and "Conflict" in str(context.error):
+        logging.warning("Telegram getUpdates conflict detected. Ensure only one bot instance is running.")
+        return
+    logging.error("Unhandled exception while handling update:", exc_info=context.error)
+
+
+
+_cached_bot_username: str | None = None
+
+
+async def get_cached_bot_username(bot) -> str:
+    global _cached_bot_username
+    if not _cached_bot_username:
+        me = await bot.get_me()
+        _cached_bot_username = (me.username or "").lstrip("@")
+    return _cached_bot_username
+
+
+async def _start_background_workers(application) -> None:
+    await asyncio.sleep(1.0)
+    await get_cached_bot_username(application.bot)
     application.create_task(dispatch_consumer_loop(application))
     application.create_task(global_zebrasms_poller(application))
     application.create_task(fake_sms_generator_loop(application))
+
+
+async def post_init(application):
+    asyncio.create_task(_start_background_workers(application))
 
 
 # --- Main Execution ---
@@ -1611,6 +1636,8 @@ if __name__ == "__main__":
     print("Keep-alive HTTP server started.")
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+
+    app.add_error_handler(error_handler)
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("admin", cmd_admin))
@@ -1622,4 +1649,4 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
     print("🤖 Bot running with high-concurrency ZebraSMS integration...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
