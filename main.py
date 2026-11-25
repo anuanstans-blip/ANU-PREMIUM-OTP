@@ -814,9 +814,14 @@ class ZebraSMSClient:
                 params=params,
             )
             if response.status_code != 200:
+                logging.warning(f"[liveaccess] HTTP {response.status_code}: {response.text[:200]}")
                 return {"meta": {"code": -500, "error": f"HTTP {response.status_code}"}}
-            return response.json()
+            data = response.json()
+            if not isinstance(data, dict) or data.get("meta", {}).get("code") != 0:
+                logging.warning(f"[liveaccess] Non-zero meta: {data}")
+            return data
         except Exception as e:
+            logging.error(f"[liveaccess] Request error: {e}")
             return {"meta": {"code": -500, "error": str(e)}}
 
     async def get_number(self, range_val: str) -> dict:
@@ -908,6 +913,7 @@ async def get_live_and_managed_ranges() -> list:
         res = await zebrasms_client.get_live_access()
         if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
             rows = res.get("data", {}).get("rows", []) or []
+            live_added = 0
             for row in rows:
                 srv = (row.get("sender") or "").strip()
                 if not srv or not is_allowed_social_sender(srv):
@@ -915,6 +921,7 @@ async def get_live_and_managed_ranges() -> list:
                 for rng in (row.get("ranges") or []):
                     if len(per_sender_ranges.get(srv, [])) >= 10:
                         break
+                    before_len = len(per_sender_ranges.get(srv, []))
                     add_range_entry(
                         srv=srv,
                         rng=str(rng),
@@ -923,6 +930,9 @@ async def get_live_and_managed_ranges() -> list:
                         provider="zebrasms",
                         from_db=False,
                     )
+                    if len(per_sender_ranges.get(srv, [])) > before_len:
+                        live_added += 1
+            logging.info(f"[liveaccess] rows={len(rows)}, live_added={live_added}")
 
     combined = []
     for ranges_list in per_sender_ranges.values():
@@ -1603,7 +1613,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logging.warning("Telegram getUpdates conflict detected. Ensure only one bot instance is running.")
         return
     logging.error("Unhandled exception while handling update:", exc_info=context.error)
-
 
 
 _cached_bot_username: str | None = None
