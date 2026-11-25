@@ -76,6 +76,29 @@ DEFAULT_RANGES_ZEBRA = [
     {"service": "WhatsApp", "country": "Ivory Coast", "flag": "🇨🇮", "range": "22501XXX", "provider": "zebrasms"},
 ]
 
+# --- Social Media Sender ID Filter ---
+BLOCKED_NON_SOCIAL_SENDERS = {
+    "binance", "bybit", "kucoin", "okx", "coinbase", "kraken", "huobi", "htx",
+    "mexc", "gate", "bitget", "crypto", "paypal", "wise", "revolut", "cashapp",
+}
+
+SOCIAL_MEDIA_KEYWORDS = (
+    "facebook", "fb", "whatsapp", "wa", "instagram", "insta", "ig",
+    "telegram", "tg", "tiktok", "snapchat", "snap", "twitter", "x.com",
+    "linkedin", "viber", "line", "zalo", "wechat", "kakao", "messenger",
+    "threads", "discord", "imo",
+)
+
+
+def is_allowed_social_sender(sender_name: str) -> bool:
+    name = (sender_name or "").strip()
+    if not name:
+        return False
+    lower = name.lower()
+    if any(blocked in lower for blocked in BLOCKED_NON_SOCIAL_SENDERS):
+        return False
+    return any(kw in lower for kw in SOCIAL_MEDIA_KEYWORDS)
+
 
 # --- Global Name Generator Helper (1,000 First Names & 1,000 Last Names) ---
 FIRST_NAMES_1000 = [
@@ -84,9 +107,9 @@ FIRST_NAMES_1000 = [
     "Mekdes", "Benjamin", "Elijah", "Girma", "Charlotte", "Amelia", "Tagay", "Abebe",
     "Kebede", "Tigist", "Selamawit", "Yohannes", "Dawit", "Tadesse", "Hanna", "Meron",
     "Biniyam", "Samuel", "Kidist", "Solomon", "Rahel", "Eyob", "Abel", "Saron",
-    "Nahom", "Eyerusalem", "Mikiyas", "Tsion", "Natnael", " Bethlehem", "Henok", "Hiwot",
-    "Yonatan", "Lidya", "Amanuel", " Bezawit", "Fikadu", "Alemitu", "Getachew", "Meseret",
-    "Tesfaye", "Zewditu", "worku", "Almaz", "Habtamu", "Aster", "Mulu", " Genet",
+    "Nahom", "Eyerusalem", "Mikiyas", "Tsion", "Natnael", "Bethlehem", "Henok", "Hiwot",
+    "Yonatan", "Lidya", "Amanuel", "Bezawit", "Fikadu", "Alemitu", "Getachew", "Meseret",
+    "Tesfaye", "Zewditu", "Worku", "Almaz", "Habtamu", "Aster", "Mulu", "Genet",
     "Tsegaye", "Tirunesh", "Ayalew", "Birtukan", "Wondimu", "Senait", "Demeke", "Frehiwot",
     "Kassa", "Etalemahu", "Gashaw", "Mebrat", "Shiferaw", "Tigest", "Addisu", "Yordanos",
     "Liam", "Oliver", "James", "Henry", "Lucas", "Alexander", "Sebastian", "Jack",
@@ -125,7 +148,7 @@ FIRST_NAMES_1000 = [
     "Sibusiso", "Sipho", "Thabo", "Bongani", "Lehlohonolo", "Kgosi", "Kagiso", "Katlego",
     "Lerato", "Naledi", "Refilwe", "Thandi", "Nomusa", "Zanele", "Ayanda", "Buhle",
     "Kamau", "Mwangi", "Njoroge", "Ochieng", "Otieno", "Wanjiku", "Njeri", "Wambui",
-    "Akinyi", "Auma", "Juma", "Baraka", "Amani", " Zawadi", "Neema", "Furaha",
+    "Akinyi", "Auma", "Juma", "Baraka", "Amani", "Zawadi", "Neema", "Furaha",
     "Jean", "Pierre", "Luc", "Marc", "Paul", "Henri", "Louis", "Antoine",
     "Claude", "Michel", "Philippe", "Julien", "Nicolas", "Thomas", "Sebastien", "Laurent",
     "Marie", "Claire", "Sophie", "Camille", "Julie", "Celeste", "Amelie", "Margaux",
@@ -159,134 +182,134 @@ FIRST_NAMES_1000 = [
     "Jun", "Yong", "Hui", "Ming", "Xin", "Bo", "Ping", "Bin",
     "Aleksandr", "Dmitry", "Maksim", "Ivan", "Artem", "Nikita", "Mikhail", "Daniil",
     "Egor", "Matvey", "Andrey", "Kirill", "Ilya", "Roman", "Sergey", "Anton",
-    "Sofia", "Anna", "Maria", "Alisa", "Viktoria", "Polina", "Polina", "Daria",
-    "Ksenia", "Kira", "Varvara", "Eva", "Milana", "Veronika", "Ekaterina", "Arina",
-    "Liam", "Oisin", "Fionn", "Cillian", "Tadhg", "Cormac", "Conor", "Darragh",
-    "Caoimhe", "Saoirse", "Fiadh", "Aoife", "Roisin", "Niamh", "Ciara", "Maeve",
-    "Jack", "Charlie", "George", "Thomas", "William", "Leo", "Oscar", "Harry",
-    "Charlotte", "Amelia", "Olivia", "Mia", "Isla", "Ava", "Grace", "Chloe",
-    "Soren", "Emil", "Kasper", "Mikkel", "Frederik", "Magnus", "Lukas", "Oliver",
-    "Freja", "Alma", "Ida", "Clara", "Emma", "Ella", "Sofia", "Astrid",
-    "Kacper", "Antoni", "Jan", "Aleksander", "Franciszek", "Jakub", "Mikolaj", "Leon",
-    "Zuzanna", "Zofia", "Hanna", "Julia", "Maja", "Alicja", "Oliwia", "Laura",
-    "Nikos", "Giorgos", "Kostas", "Dimitris", "Giannis", "Panagiotis", "Christos", "Vasilis",
-    "Elena", "Maria", "Katerina", "Eleni", "Sofia", "Georgia", "Christina", "Ioanna",
-    "Mehmet", "Mustafa", "Ahmet", "Emre", "Burak", "Can", "Kaan", "Kerem",
-    "Zeynep", "Elif", "Defne", "Azra", "Eylül", "Nehir", "Mira", "Ada",
-    "Farhan", "Rizky", "Dimas", "Bagas", "Bayu", "Arif", "Fajar", "Wahyu",
-    "Putri", "Siti", "Ayu", "Dewi", "Intan", "Lestari", "Ratna", "Sri",
-    "Somchai", "Somsak", "Somporn", "Anan", "Chai", "Prasert", "Kittipong", "Nattapong",
-    "Malee", "Pornthip", "Supaporn", "Wanida", "Siriporn", "Kannika", "Nok", "Ploy",
-    "Minh", "Hieu", "Nam", "Khoa", "Duc", "Tuan", "Hung", "Dung",
-    "Linh", "Huong", "Thao", "Ngoc", "Trang", "Mai", "Lan", "Hanh",
-    "Mateo", "Santiago", "Sebastian", "Matias", "Nicolas", "Samuel", "Alejandro", "Diego",
-    "Valeria", "Sofía", "Isabella", "Martina", "Lucía", "Camila", "Mariana", "Salomé",
-    "Jaden", "Tyler", "Brandon", "Justin", "Kevin", "Austin", "Caleb", "Zachary",
-    "Kayla", "Brianna", "Jasmine", "Destiny", "Sierra", "Alexis", "Kendra", "Morgan",
-    "Rory", "Callum", "Finlay", "Lachlan", "Hamish", "Fraser", "Angus", "Blair",
-    " Isla", " Freya", "Ailsa", "Morag", " Kirsty", " Fiona", " Skye", " Maisie",
-    "Rhys", "Owain", "Gareth", "Dylan", "Evan", "Morgan", "Toby", "Ellis",
-    " Seren", " Carys", " Megan", " Bethan", " Lowri", " Nia", " Ffion", " Rhian",
-    "Marek", "Jakub", "Tomas", "Martin", "Lukas", "David", "Filip", "Ondrej",
-    "Tereza", "Eliska", "Anna", "Adela", "Karolina", "Kristyna", "Natálie", "Viktorie",
-    "Bence", "Levente", "Mate", "Dominik", "Marcell", "Balazs", "Dániel", "Zsombor",
-    "Hanna", "Anna", "Lili", "Zoé", "Emma", "Luca", "Nora", "Mira",
-    "Onni", "Elias", "Leo", "Oliver", "Väinö", "Toivo", "Aatos", "Eino",
-    "Aino", "Aada", "Eevi", "Lilja", "Helmi", "Venla", "Sofia", "Olivia",
-    "Artyom", "Bohdan", "Maksym", "Danylo", "Vladyslav", "Oleksandr", "Andriy", "Denys",
-    "Sofiia", "Anastasiia", "Viktoriia", "Solomiia", "Veronika", "Zlata", "Polina", "Milana",
-    "Luka", "Marko", "Filip", "Jakov", "Roko", "Fran", "Ivan", "Petar",
-    "Lucija", "Mia", "Ema", "Nika", "Marta", "Rita", "Sara", "Klara",
-    "Lukas", "Nojus", "Matas", "Jokubas", "Dominykas", "Emilis", "Adomas", "Kajus",
-    "Liepa", "Amelija", "Emilija", "Gabija", "Kamile", "Austeja", "Viktorija", "Kotrina",
-    "Roberts", "Markuss", "Gustavs", "Emils", "Arturs", "Kaspars", "Janis", "Toms",
-    "Sofija", "Emilija", "Amelija", "Marta", "Anna", "Alise", "Paula", "Kate",
-    "Rasmus", "Oliver", "Hugo", "Liam", "Matteo", "Lucas", "Leon", "Elliot",
-    "Elsa", "Alice", "Maja", "Astrid", "Alma", "Freja", "Ella", "Vera",
-    "Sander", "Rasmus", "Oliver", "Robin", "Marten", "Henri", "Artur", "Kristjan",
-    "Mia", "Lenna", "Marta", "Sandra", "Sofia", "Eliise", "Emma", "Lisandra",
-    "Luka", "Nik", "Jan", "Mark", "Filip", "Jakob", "Ziga", "Tilen",
-    "Ema", "Sara", "Mia", "Hana", "Zala", "Lara", "Julija", "Kaja",
-    "Stefan", "Nikola", "Luka", "Marko", "Uros", "Filip", "Milos", "Aleksa",
-    "Dunja", "Sara", "Teodora", "Tara", "Milica", "Sofija", "Lena", "Una",
-    "Kaloyan", "Aleksandar", "Georgi", "Martin", "Dimitar", "Ivan", "Nikolay", "Viktor",
-    "Viktoria", "Maria", "Nikol", "Raya", "Yoana", "Sofia", "Gabriela", "Daria",
-    "Andrei", "David", "Matei", "Gabriel", "Alexandru", "Stefan", "Luca", "Filip",
-    "Maria", "Elena", "Sofia", "Ioana", "Eva", "Antonia", "Amalia", "Ana",
-    "Sami", "Karim", "Youssef", "Bilal", "Rami", "Ziad", "Anas", "Omar",
-    "Yasmine", "Salma", "Nour", "Mariam", "Ines", "Aya", "Malak", "Farah",
-    "Ayoub", "Hamza", "Mehdi", "Yassine", "Othman", "Amine", "Adil", "Saad",
-    "Salma", "Yasmine", "Hiba", "Aya", "Kenza", "Meryem", "Rania", "Zineb",
-    "Tarek", "Fares", "Ziad", "Karim", "Marwan", "Sherif", "Hany", "Tamer",
-    "Habiba", "Jana", "Malak", "Salma", "Farida", "Mariam", "Nada", "Laila",
-    "Abdullah", "Fahad", "Khalid", "Saud", "Faisal", "Sultan", "Tariq", "Nawaf",
-    "Noura", "Sara", "Reem", "Lama", "Alia", "Hessa", "Maha", "Joud",
-    "Rashid", "Hamdan", "Majid", "Saeed", "Khalifa", "Sultan", "Zayed", "Mansoor",
-    "Maryam", "Fatima", "Mouza", "Shamma", "Alya", "Maitha", "Latifa", "Hind",
-    "Zain", "Hassan", "Ali", "Hadi", "Abbas", "Mustafa", "Jaafar", "Mahdi",
-    "Zahra", "Fatima", "Zainab", "Hawraa", "Maryam", "Nur", "Khadija", "Amina",
-    "Darius", "Cedric", "Malik", "Jalen", "Terrence", "Desmond", "Andre", "Kendall",
-    "Imani", "Simone", "Tiana", "Nia", "Sasha", "Zuri", "Amara", "Kaya",
-    "Matteo", "Lorenzo", "Diego", "Gael", "Thiago", "Mateo", "Bruno", "Liam",
-    "Camila", "Valeria", "Sofía", "Emma", "Renata", "Regina", "Ximena", "Paula",
-    "Joaquin", "Ignacio", "Tomas", "Benjamin", "Agustin", "Vicente", "Maximiliano", "Martin",
-    " Emilia", "Isidora", "Maite", "Trinidad", "Amanda", "Josefa", "Florencia", "Antonia",
-    "Juan", "Carlos", "Luis", "Jorge", "Pedro", "Miguel", "Andres", "Rafael",
-    "Valentina", "Mariana", "Valeria", "Gabriela", "Sara", "Salome", "Isabella", "Luciana",
-    "Franco", "Bautista", "Thiago", "Benicio", "Santino", "Joaquin", "Mateo", "Valentino",
-    "Olivia", "Martina", "Isabella", "Catalina", "Emilia", "Sofia", "Delfina", "Alma",
-    "Ezekiel", "Caleb", "Malachi", "Jeremiah", "Gideon", "Micah", "jonah", "Ezra",
-    "Miriam", "Ruth", "Esther", "Naomi", "Deborah", "Rachel", "Rebecca", "Leah",
-    "Kieran", "Callum", "Declan", "Rowan", "Gavin", "Colin", "Graham", "Stuart",
-    " Fiona", "Heather", "Catriona", "Eilidh", "Mhairi", "Rhona", "Ailsa", "Shona",
-    "Rohan", "Vikram", "Siddharth", "Pranav", "Nikhil", "Varun", "Karan", "Akshay",
-    "Pooja", "Divya", "Sneha", "Neha", "Priya", "Kavita", "Anjali", "Shruti",
-    "Bilal", "Usman", "Hamza", "Zain", "Tariq", "Saad", "Haris", "Umer",
-    "Ayesha", "Zainab", "Fatima", "Hira", "Sana", "Mahnoor", "laiba", "Areeba",
-    "Rafiq", "Tanvir", "Shakil", "Mahmud", "Asif", "Kamal", "Farid", "Noman",
-    " Nusrat", "Sharmin", "Tasnim", " Farhana", "Mim", "Raisa", "Sabrina", "Sumaiya",
-    "Jian", "Hao", "Zhi", "Chen", "Yu", "Kai", "Feng", "Long",
-    "Mei", "Xue", "Ling", "Hong", "Qing", "Shu", "Lan", "Ying",
-    "Aung", "Kyaw", "Zaw", "Min", "Htet", "Naing", "Tun", "Win",
-    "Su", "Hnin", "Thandar", "Aye", " Khin", "Ei", "May", "Sandar",
-    "Sokha", "Dara", "Rithy", "Vanna", "Sophea", "Chan", "Visal", "Bora",
-    "Bopha", " Sreymom", "Channary", "Kunthea", "Sotheary", "Leakena", "Chenda", "Pich",
-    "Kham", "Souk", "Boun", "Phone", "Seng", "Vilay", "Thong", "Xay",
-    "Chanthaly", "Vilayphone", "Bounpheng", "Souksavanh", "Khamla", "Malay", "Noy", "Latsamy",
-    "Tenzing", "Karma", "Dorje", "Sonam", "Tashi", "Pemba", "Sherpa", "Phurba",
-    "Yangchen", "Pema", "Dolma", "Tsering", "Dechen", "Choden", "Kunsang", "Lhamo",
-    "Bikash", "Prakash", "Sujan", "Ramesh", "dipendra", "Sandeep", "Binod", "Kiran",
-    "Sita", "Gita", "Rita", "Sabita", "Kabita", "Sunita", "Anita", "Pabitra",
-    "nuwan", "Kasun", "Lahiru", "Dinesh", "Chamara", "Dilshan", " Tharindu", "Mahesh",
-    "Nimali", "Dilani", "Chamari", "Tharushi", " Kavindi", "Sanduni", "hashini", "Ruwanthi",
-    "Moussa", "Mamady", "Sekou", "Oumar", "Ibrahima", "Boubacar", "Amadou", "Modibo",
-    "Fatoumata", "Mariam", "Kadiatou", "Aissatou", "Hawa", "Aminata", "Bintou", " Salimata",
-    "Lamine", "Mamadou", "Cheikh", "Ousmane", "Demba", "Moussa", "Abdou", "Babacar",
-    "Ndeye", "Astou", "Khady", "Awa", "Sokhna", "Ramatoulaye", "Coumba", " Ndeye",
-    "Koffi", "Kouame", "Yao", "Konan", "Aka", "Brou", "Kouadio", "N'Guessan",
-    "Aya", "Affoue", "Amenan", "Lou", " Adjoua", "Akissi", "Marie", "Christelle",
-    "Fofana", "Konate", "Coulibaly", "Traore", "Diaby", "Sangare", " Toure", " Ouattara",
-    "Maimouna", "Rokia", "Djene", "Korotoumou", "Djeneba", "Fanta", "Sali", "Kadia",
-    "Tendai", "Tatenda", "Takudzwa", "Tinashe", " Kudzai", "Farai", "Munyaradzi", "Simbarashe",
-    "Rumbidzai", "Chiedza", "Nyasha", "Tariro", "Rutendo", "Tapiwa", "Ruvimbo", "Chenai",
-    "Thabo", "Kabelo", "tumelo", "Mpho", "Katlego", " Kagiso", "Neo", "Tshepo",
-    "Boitumelo", "Lerato", "Keabetswe", "Gorata", "Onalenna", "Lesego", "Gaone", "Masego",
-    "Chanda", "Bwalya", "Mutale", "Mwamba", "Mulenga", "Tembo", "Phiri", "Banda",
-    "Mutinta", "Natasha", "Chileshe", "Mumba", "Bupe", "Mapalo", "Kabwe", "Faith",
-    "Amos", "patrick", "Joseph", "Moses", "Peter", "John", "Stephen", "David",
-    "Grace", "Sarah", "Esther", "Mercy", "Joy", "Peace", "Hope", "Gloria",
-    "Kofi", "Kwame", "Yaw", "Kojo", "Kwesi", "Kwadwo", "Kobby", "Ebo",
-    "Esi", "Afia", "Akua", "Yaa", "Adwoa", "Mansah", " Serwaa", "Pokuaa",
+    "Sofia", "Anna", "Maria", "Alisa", "Viktoria", "Polina", "Daria", "Ksenia",
+    "Kira", "Varvara", "Eva", "Milana", "Veronika", "Ekaterina", "Arina", "Liam",
+    "Oisin", "Fionn", "Cillian", "Tadhg", "Cormac", "Conor", "Darragh", "Caoimhe",
+    "Saoirse", "Fiadh", "Aoife", "Roisin", "Niamh", "Ciara", "Maeve", "Jack",
+    "Charlie", "George", "Thomas", "William", "Leo", "Oscar", "Harry", "Charlotte",
+    "Amelia", "Olivia", "Mia", "Isla", "Ava", "Grace", "Chloe", "Soren",
+    "Emil", "Kasper", "Mikkel", "Frederik", "Magnus", "Lukas", "Oliver", "Freja",
+    "Alma", "Ida", "Clara", "Emma", "Ella", "Sofia", "Astrid", "Kacper",
+    "Antoni", "Jan", "Aleksander", "Franciszek", "Jakub", "Mikolaj", "Leon", "Zuzanna",
+    "Zofia", "Hanna", "Julia", "Maja", "Alicja", "Oliwia", "Laura", "Nikos",
+    "Giorgos", "Kostas", "Dimitris", "Giannis", "Panagiotis", "Christos", "Vasilis", "Elena",
+    "Maria", "Katerina", "Eleni", "Sofia", "Georgia", "Christina", "Ioanna", "Mehmet",
+    "Mustafa", "Ahmet", "Emre", "Burak", "Can", "Kaan", "Kerem", "Zeynep",
+    "Elif", "Defne", "Azra", "Eylül", "Nehir", "Mira", "Ada", "Farhan",
+    "Rizky", "Dimas", "Bagas", "Bayu", "Arif", "Fajar", "Wahyu", "Putri",
+    "Siti", "Ayu", "Dewi", "Intan", "Lestari", "Ratna", "Sri", "Somchai",
+    "Somsak", "Somporn", "Anan", "Chai", "Prasert", "Kittipong", "Nattapong", "Malee",
+    "Pornthip", "Supaporn", "Wanida", "Siriporn", "Kannika", "Nok", "Ploy", "Minh",
+    "Hieu", "Nam", "Khoa", "Duc", "Tuan", "Hung", "Dung", "Linh",
+    "Huong", "Thao", "Ngoc", "Trang", "Mai", "Lan", "Hanh", "Mateo",
+    "Santiago", "Sebastian", "Matias", "Nicolas", "Samuel", "Alejandro", "Diego", "Valeria",
+    "Sofía", "Isabella", "Martina", "Lucía", "Camila", "Mariana", "Salomé", "Jaden",
+    "Tyler", "Brandon", "Justin", "Kevin", "Austin", "Caleb", "Zachary", "Kayla",
+    "Brianna", "Jasmine", "Destiny", "Sierra", "Alexis", "Kendra", "Morgan", "Rory",
+    "Callum", "Finlay", "Lachlan", "Hamish", "Fraser", "Angus", "Blair", "Isla",
+    "Freya", "Ailsa", "Morag", "Kirsty", "Fiona", "Skye", "Maisie", "Rhys",
+    "Owain", "Gareth", "Dylan", "Evan", "Morgan", "Toby", "Ellis", "Seren",
+    "Carys", "Megan", "Bethan", "Lowri", "Nia", "Ffion", "Rhian", "Marek",
+    "Jakub", "Tomas", "Martin", "Lukas", "David", "Filip", "Ondrej", "Tereza",
+    "Eliska", "Anna", "Adela", "Karolina", "Kristyna", "Natálie", "Viktorie", "Bence",
+    "Levente", "Mate", "Dominik", "Marcell", "Balazs", "Dániel", "Zsombor", "Hanna",
+    "Anna", "Lili", "Zoé", "Emma", "Luca", "Nora", "Mira", "Onni",
+    "Elias", "Leo", "Oliver", "Väinö", "Toivo", "Aatos", "Eino", "Aino",
+    "Aada", "Eevi", "Lilja", "Helmi", "Venla", "Sofia", "Olivia", "Artyom",
+    "Bohdan", "Maksym", "Danylo", "Vladyslav", "Oleksandr", "Andriy", "Denys", "Sofiia",
+    "Anastasiia", "Viktoriia", "Solomiia", "Veronika", "Zlata", "Polina", "Milana", "Luka",
+    "Marko", "Filip", "Jakov", "Roko", "Fran", "Ivan", "Petar", "Lucija",
+    "Mia", "Ema", "Nika", "Marta", "Rita", "Sara", "Klara", "Lukas",
+    "Nojus", "Matas", "Jokubas", "Dominykas", "Emilis", "Adomas", "Kajus", "Liepa",
+    "Amelija", "Emilija", "Gabija", "Kamile", "Austeja", "Viktorija", "Kotrina", "Roberts",
+    "Markuss", "Gustavs", "Emils", "Arturs", "Kaspars", "Janis", "Toms", "Sofija",
+    "Emilija", "Amelija", "Marta", "Anna", "Alise", "Paula", "Kate", "Rasmus",
+    "Oliver", "Hugo", "Liam", "Matteo", "Lucas", "Leon", "Elliot", "Elsa",
+    "Alice", "Maja", "Astrid", "Alma", "Freja", "Ella", "Vera", "Sander",
+    "Rasmus", "Oliver", "Robin", "Marten", "Henri", "Artur", "Kristjan", "Mia",
+    "Lenna", "Marta", "Sandra", "Sofia", "Eliise", "Emma", "Lisandra", "Luka",
+    "Nik", "Jan", "Mark", "Filip", "Jakob", "Ziga", "Tilen", "Ema",
+    "Sara", "Mia", "Hana", "Zala", "Lara", "Julija", "Kaja", "Stefan",
+    "Nikola", "Luka", "Marko", "Uros", "Filip", "Milos", "Aleksa", "Dunja",
+    "Sara", "Teodora", "Tara", "Milica", "Sofija", "Lena", "Una", "Kaloyan",
+    "Aleksandar", "Georgi", "Martin", "Dimitar", "Ivan", "Nikolay", "Viktor", "Viktoria",
+    "Maria", "Nikol", "Raya", "Yoana", "Sofia", "Gabriela", "Daria", "Andrei",
+    "David", "Matei", "Gabriel", "Alexandru", "Stefan", "Luca", "Filip", "Maria",
+    "Elena", "Sofia", "Ioana", "Eva", "Antonia", "Amalia", "Ana", "Sami",
+    "Karim", "Youssef", "Bilal", "Rami", "Ziad", "Anas", "Omar", "Yasmine",
+    "Salma", "Nour", "Mariam", "Ines", "Aya", "Malak", "Farah", "Ayoub",
+    "Hamza", "Mehdi", "Yassine", "Othman", "Amine", "Adil", "Saad", "Salma",
+    "Yasmine", "Hiba", "Aya", "Kenza", "Meryem", "Rania", "Zineb", "Tarek",
+    "Fares", "Ziad", "Karim", "Marwan", "Sherif", "Hany", "Tamer", "Habiba",
+    "Jana", "Malak", "Salma", "Farida", "Mariam", "Nada", "Laila", "Abdullah",
+    "Fahad", "Khalid", "Saud", "Faisal", "Sultan", "Tariq", "Nawaf", "Noura",
+    "Sara", "Reem", "Lama", "Alia", "Hessa", "Maha", "Joud", "Rashid",
+    "Hamdan", "Majid", "Saeed", "Khalifa", "Sultan", "Zayed", "Mansoor", "Maryam",
+    "Fatima", "Mouza", "Shamma", "Alya", "Maitha", "Latifa", "Hind", "Zain",
+    "Hassan", "Ali", "Hadi", "Abbas", "Mustafa", "Jaafar", "Mahdi", "Zahra",
+    "Fatima", "Zainab", "Hawraa", "Maryam", "Nur", "Khadija", "Amina", "Darius",
+    "Cedric", "Malik", "Jalen", "Terrence", "Desmond", "Andre", "Kendall", "Imani",
+    "Simone", "Tiana", "Nia", "Sasha", "Zuri", "Amara", "Kaya", "Matteo",
+    "Lorenzo", "Diego", "Gael", "Thiago", "Bruno", "Liam", "Camila", "Valeria",
+    "Sofía", "Emma", "Renata", "Regina", "Ximena", "Paula", "Joaquin", "Ignacio",
+    "Tomas", "Benjamin", "Agustin", "Vicente", "Maximiliano", "Martin", "Emilia", "Isidora",
+    "Maite", "Trinidad", "Amanda", "Josefa", "Florencia", "Antonia", "Juan", "Carlos",
+    "Luis", "Jorge", "Pedro", "Miguel", "Andres", "Rafael", "Valentina", "Mariana",
+    "Valeria", "Gabriela", "Sara", "Salome", "Isabella", "Luciana", "Franco", "Bautista",
+    "Thiago", "Benicio", "Santino", "Joaquin", "Mateo", "Valentino", "Olivia", "Martina",
+    "Isabella", "Catalina", "Emilia", "Sofia", "Delfina", "Alma", "Ezekiel", "Caleb",
+    "Malachi", "Jeremiah", "Gideon", "Micah", "Jonah", "Ezra", "Miriam", "Ruth",
+    "Esther", "Naomi", "Deborah", "Rachel", "Rebecca", "Leah", "Kieran", "Callum",
+    "Declan", "Rowan", "Gavin", "Colin", "Graham", "Stuart", "Fiona", "Heather",
+    "Catriona", "Eilidh", "Mhairi", "Rhona", "Ailsa", "Shona", "Rohan", "Vikram",
+    "Siddharth", "Pranav", "Nikhil", "Varun", "Karan", "Akshay", "Pooja", "Divya",
+    "Sneha", "Neha", "Priya", "Kavita", "Anjali", "Shruti", "Bilal", "Usman",
+    "Hamza", "Zain", "Tariq", "Saad", "Haris", "Umer", "Ayesha", "Zainab",
+    "Fatima", "Hira", "Sana", "Mahnoor", "Laiba", "Areeba", "Rafiq", "Tanvir",
+    "Shakil", "Mahmud", "Asif", "Kamal", "Farid", "Noman", "Nusrat", "Sharmin",
+    "Tasnim", "Farhana", "Mim", "Raisa", "Sabrina", "Sumaiya", "Jian", "Hao",
+    "Zhi", "Chen", "Yu", "Kai", "Feng", "Long", "Mei", "Xue",
+    "Ling", "Hong", "Qing", "Shu", "Lan", "Ying", "Aung", "Kyaw",
+    "Zaw", "Min", "Htet", "Naing", "Tun", "Win", "Su", "Hnin",
+    "Thandar", "Aye", "Khin", "Ei", "May", "Sandar", "Sokha", "Dara",
+    "Rithy", "Vanna", "Sophea", "Chan", "Visal", "Bora", "Bopha", "Sreymom",
+    "Channary", "Kunthea", "Sotheary", "Leakena", "Chenda", "Pich", "Kham", "Souk",
+    "Boun", "Phone", "Seng", "Vilay", "Thong", "Xay", "Chanthaly", "Vilayphone",
+    "Bounpheng", "Souksavanh", "Khamla", "Malay", "Noy", "Latsamy", "Tenzing", "Karma",
+    "Dorje", "Sonam", "Tashi", "Pemba", "Sherpa", "Phurba", "Yangchen", "Pema",
+    "Dolma", "Tsering", "Dechen", "Choden", "Kunsang", "Lhamo", "Bikash", "Prakash",
+    "Sujan", "Ramesh", "Dipendra", "Sandeep", "Binod", "Kiran", "Sita", "Gita",
+    "Rita", "Sabita", "Kabita", "Sunita", "Anita", "Pabitra", "Nuwan", "Kasun",
+    "Lahiru", "Dinesh", "Chamara", "Dilshan", "Tharindu", "Mahesh", "Nimali", "Dilani",
+    "Chamari", "Tharushi", "Kavindi", "Sanduni", "Hashini", "Ruwanthi", "Moussa", "Mamady",
+    "Sekou", "Oumar", "Ibrahima", "Boubacar", "Amadou", "Modibo", "Fatoumata", "Mariam",
+    "Kadiatou", "Aissatou", "Hawa", "Aminata", "Bintou", "Salimata", "Lamine", "Mamadou",
+    "Cheikh", "Ousmane", "Demba", "Moussa", "Abdou", "Babacar", "Ndeye", "Astou",
+    "Khady", "Awa", "Sokhna", "Ramatoulaye", "Coumba", "Koffi", "Kouame", "Yao",
+    "Konan", "Aka", "Brou", "Kouadio", "N'Guessan", "Aya", "Affoue", "Amenan",
+    "Lou", "Adjoua", "Akissi", "Marie", "Christelle", "Fofana", "Konate", "Coulibaly",
+    "Traore", "Diaby", "Sangare", "Toure", "Ouattara", "Maimouna", "Rokia", "Djene",
+    "Korotoumou", "Djeneba", "Fanta", "Sali", "Kadia", "Tendai", "Tatenda", "Takudzwa",
+    "Tinashe", "Kudzai", "Farai", "Munyaradzi", "Simbarashe", "Rumbidzai", "Chiedza", "Nyasha",
+    "Tariro", "Rutendo", "Tapiwa", "Ruvimbo", "Chenai", "Thabo", "Kabelo", "Tumelo",
+    "Mpho", "Katlego", "Kagiso", "Neo", "Tshepo", "Boitumelo", "Lerato", "Keabetswe",
+    "Gorata", "Onalenna", "Lesego", "Gaone", "Masego", "Chanda", "Bwalya", "Mutale",
+    "Mwamba", "Mulenga", "Tembo", "Phiri", "Banda", "Mutinta", "Natasha", "Chileshe",
+    "Mumba", "Bupe", "Mapalo", "Kabwe", "Faith", "Amos", "Patrick", "Joseph",
+    "Moses", "Peter", "John", "Stephen", "David", "Grace", "Sarah", "Esther",
+    "Mercy", "Joy", "Peace", "Hope", "Gloria", "Kofi", "Kwame", "Yaw",
+    "Kojo", "Kwesi", "Kwadwo", "Kobby", "Ebo", "Esi", "Afia", "Akua",
+    "Yaa", "Adwoa", "Mansah", "Serwaa", "Pokuaa",
 ]
 
 LAST_NAMES_1000 = [
     "Geremew", "Abriham", "Williams", "Kassa", "Jones", "Kondara", "Dawit",
     "Wilson", "Taylor", "Anderson", "Mulugeta", "Dachasa", "White", "Harris",
     "Martin", "Takele", "Garcia", "Martinez", "Munuro", "Asaminew", "Rodriguez", "Tadesse",
-    "Kebede", "Alemu", "Bekele", "Hailu", "Tesfaye", "Girma", "Wolde", " Mekonnen",
-    "Desta", "Negash", " Gebre", "Haile", "Abera", "Assefa", "Worku", "Lemma",
+    "Kebede", "Alemu", "Bekele", "Hailu", "Tesfaye", "Girma", "Wolde", "Mekonnen",
+    "Desta", "Negash", "Gebre", "Haile", "Abera", "Assefa", "Worku", "Lemma",
     "Getachew", "Tsegaye", "Ayalew", "Beshah", "Demissie", "Fekadu", "Mengistu", "Tefera",
-    "Wondimu", "Yilma", "Zewde", "Belay", "Chala", "Diriba", " Feyisa", "Gemechu",
+    "Wondimu", "Yilma", "Zewde", "Belay", "Chala", "Diriba", "Feyisa", "Gemechu",
     "Gobena", "Hordofa", "Jaleta", "Ketema", "Leta", "Merga", "Olana", "Roba",
     "Tufa", "Wakjira", "Abate", "Admassu", "Amare", "Anteneh", "Araya", "Ayenew",
     "Bantie", "Bayu", "Bireda", "Bogale", "Dagne", "Damtew", "Dejene", "Derese",
@@ -324,9 +347,9 @@ LAST_NAMES_1000 = [
     "Mustafa", "Youssef", "Saleh", "Abdullah", "Mansour", "Khoury", "Haddad", "Farah",
     "Darwish", "Sabbagh", "Nassar", "Bazzi", "Harb", "Saad", "Zahr", "El-Masri",
     "Al-Mansoor", "Al-Hashimi", "Al-Qahtani", "Al-Ghamdi", "Al-Harbi", "Al-Otaibi", "Al-Dosari", "Al-Shammari",
-    "Okafor", "Nwosu", " Eze", "Okonkwo", "Obi", "Nwachukwu", "Adeyemi", "Adebayo",
+    "Okafor", "Nwosu", "Eze", "Okonkwo", "Obi", "Nwachukwu", "Adeyemi", "Adebayo",
     "Ogunleye", "Balogun", "Akintola", "Bakare", "Mensah", "Boateng", "Owusu", "Appiah",
-    "Kumi", "Darko", "Amoah", "agyeman", "Tetteh", "Quaye", "Addo", "Asante",
+    "Kumi", "Darko", "Amoah", "Agyeman", "Tetteh", "Quaye", "Addo", "Asante",
     "Ndlovu", "Khumalo", "Mokoena", "Dlamini", "Zulu", "Sithole", "Mahlangu", "Nkosi",
     "Van Der Merwe", "Botha", "Pretorius", "Venter", "Nel", "Fourie", "Jacobs", "Coetzee",
     "Kamau", "Mwangi", "Njoroge", "Ochieng", "Otieno", "Wanjiku", "Kimani", "Karanja",
@@ -373,7 +396,7 @@ LAST_NAMES_1000 = [
     "Aydin", "Ozdemir", "Arslan", "Dogan", "Kilic", "Aslan", "Cetin", "Kara",
     "Pratama", "Saputra", "Hidayat", "Nugroho", "Wijaya", "Santoso", "Kurniawan", "Setiawan",
     "Lestari", "Wulandari", "Utami", "Rahmawati", "Puspita", "Sari", "Dewi", "Kusuma",
-    "Saetan", "Saechao", "Saelee", "Tang", "Wong", "Chan", "Ho", " Cheung",
+    "Saetan", "Saechao", "Saelee", "Tang", "Wong", "Chan", "Ho", "Cheung",
     "Nguyen", "Tran", "Le", "Pham", "Hoang", "Huynh", "Phan", "Vu",
     "Vo", "Dang", "Bui", "Do", "Ho", "Ngo", "Duong", "Ly",
     "Hernandez", "Flores", "Reyes", "Cruz", "Morales", "Gomez", "Ramos", "Mendoza",
@@ -745,7 +768,7 @@ def auto_detect_country_and_flag(country_text: str, phone_or_range: str) -> tupl
         key=len,
         reverse=True
     )
-    
+
     for prefix in numeric_keys:
         if digits_only.startswith(prefix):
             return COUNTRY_FLAG_MAP[prefix]
@@ -777,10 +800,24 @@ class ZebraSMSClient:
             "Content-Type": "application/json",
         }
         self.client = httpx.AsyncClient(
-            follow_redirects=True, 
-            timeout=5.0, 
+            follow_redirects=True,
+            timeout=5.0,
             limits=httpx.Limits(max_keepalive_connections=50, max_connections=200)
         )
+
+    async def get_live_access(self, sender: str = None) -> dict:
+        try:
+            params = {"sender": sender} if sender else {}
+            response = await self.client.get(
+                f"{self.base_url}/publicapi/liveaccess",
+                headers=self.headers,
+                params=params,
+            )
+            if response.status_code != 200:
+                return {"meta": {"code": -500, "error": f"HTTP {response.status_code}"}}
+            return response.json()
+        except Exception as e:
+            return {"meta": {"code": -500, "error": str(e)}}
 
     async def get_number(self, range_val: str) -> dict:
         try:
@@ -812,6 +849,101 @@ class ZebraSMSClient:
 
 
 zebrasms_client = ZebraSMSClient(ZEBRASMS_API_KEY) if ZEBRASMS_API_KEY else None
+
+
+async def get_live_and_managed_ranges() -> list:
+    """
+    Combines saved DB/fallback ranges with live /publicapi/liveaccess ranges:
+    - Only includes active social media / messaging sender IDs.
+    - Keeps exact sender casing (does not combine 'FACEBOOK' and 'Facebook').
+    - Ignores duplicate ranges for the same sender ID.
+    - Caps at 10 active ranges per sender ID (ignores 11th+).
+    """
+    per_sender_ranges = {}
+    per_sender_seen = {}
+
+    def add_range_entry(srv: str, rng: str, country: str, flag: str, provider: str, from_db: bool):
+        srv_clean = (srv or "").strip()
+        rng_clean = (rng or "").strip()
+        if not srv_clean or not rng_clean:
+            return
+        if not is_allowed_social_sender(srv_clean):
+            return
+
+        per_sender_ranges.setdefault(srv_clean, [])
+        per_sender_seen.setdefault(srv_clean, set())
+
+        # Ignore duplicate range for the same sender ID
+        if rng_clean in per_sender_seen[srv_clean]:
+            return
+
+        # Hard limit: max 10 active ranges per sender ID (ignore 11th+)
+        if len(per_sender_ranges[srv_clean]) >= 10:
+            return
+
+        c_name, detected_flag = auto_detect_country_and_flag(country, rng_clean)
+        per_sender_seen[srv_clean].add(rng_clean)
+        per_sender_ranges[srv_clean].append({
+            "service": srv_clean,
+            "country": c_name,
+            "flag": flag if flag and flag != "🌐" else detected_flag,
+            "range": rng_clean,
+            "provider": provider or "zebrasms",
+            "from_db": from_db,
+        })
+
+    # 1. Saved DB / fallback ranges first
+    for r in db_get_all_managed_ranges():
+        add_range_entry(
+            srv=r.get("service", ""),
+            rng=r.get("range", ""),
+            country=r.get("country", ""),
+            flag=r.get("flag", ""),
+            provider=r.get("provider", "zebrasms"),
+            from_db=True,
+        )
+
+    # 2. Merge live delivering ranges from /publicapi/liveaccess
+    if zebrasms_client:
+        res = await zebrasms_client.get_live_access()
+        if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
+            rows = res.get("data", {}).get("rows", []) or []
+            for row in rows:
+                srv = (row.get("sender") or "").strip()
+                if not srv or not is_allowed_social_sender(srv):
+                    continue
+                for rng in (row.get("ranges") or []):
+                    if len(per_sender_ranges.get(srv, [])) >= 10:
+                        break
+                    add_range_entry(
+                        srv=srv,
+                        rng=str(rng),
+                        country="",
+                        flag="",
+                        provider="zebrasms",
+                        from_db=False,
+                    )
+
+    combined = []
+    for ranges_list in per_sender_ranges.values():
+        combined.extend(ranges_list)
+    return combined
+
+
+async def build_channel_keyboard(bot, otp_code: str, include_bot_button: bool = True) -> InlineKeyboardMarkup:
+    bot_info = await bot.get_me()
+    bot_username = (bot_info.username or "").lstrip("@")
+
+    first_row = [
+        InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))
+    ]
+    if include_bot_button and bot_username:
+        first_row.append(InlineKeyboardButton("🤖 Bot", url=f"https://t.me/{bot_username}"))
+
+    return InlineKeyboardMarkup([
+        first_row,
+        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")],
+    ])
 
 
 async def auto_delete_allocation_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, alloc_key: str):
@@ -853,15 +985,7 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 *Sender:* `{dummy_sender}`\n"
             f"💬 *Full Message:* `{dummy_message}`"
         )
-        channel_keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(f"📋 Copy OTP: {code}", copy_text=CopyTextButton(text=str(code))),
-                InlineKeyboardButton("🤖 Bot", url="https://t.me/anupremiumotp_bot")
-            ],
-            [
-                InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")
-            ]
-        ])
+        channel_keyboard = await build_channel_keyboard(context.bot, code, include_bot_button=True)
         try:
             await context.bot.send_message(
                 chat_id=CHANNEL_CHAT_ID,
@@ -881,7 +1005,7 @@ async def dispatch_consumer_loop(app):
         try:
             item = await otp_dispatch_queue.get()
             allocation_info, target_number, otp_code, sender, msg_text = item
-            
+
             msg_id = f"{target_number}_{otp_code}_{msg_text}"
             if len(seen_messages) > MAX_SEEN_SIZE:
                 seen_messages.clear()
@@ -899,7 +1023,7 @@ async def dispatch_consumer_loop(app):
                 f"📩 *Hey {user_fname}, your OTP has arrived!*\n\n"
                 f"📱 *To Number:* `{target_number}`\n"
             )
-            
+
             dm_keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))]
             ])
@@ -918,10 +1042,7 @@ async def dispatch_consumer_loop(app):
                     f"👤 *Sender:* `{sender}`\n"
                     f"💬 *Full Message:* `{msg_text}`"
                 )
-                channel_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))],
-                    [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")]
-                ])
+                channel_keyboard = await build_channel_keyboard(app.bot, otp_code, include_bot_button=True)
                 try:
                     await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                 except Exception as err:
@@ -972,14 +1093,14 @@ async def fake_sms_generator_loop(app):
         try:
             await asyncio.sleep(fake_otp_settings["interval"])
             if fake_otp_settings["enabled"] and CHANNEL_CHAT_ID:
-                all_ranges = db_get_all_managed_ranges()
+                all_ranges = await get_live_and_managed_ranges()
                 if all_ranges:
                     chosen_range = random.choice(all_ranges)
-                    app_name = chosen_range["service"].upper()
+                    app_name = chosen_range["service"]
                     country_name = chosen_range["country"]
                     flag_icon = chosen_range["flag"]
                     range_prefix = re.sub(r"\D", "", chosen_range["range"])[:5]
-                    
+
                     simulated_num = f"+{range_prefix}{''.join([str(random.randint(0, 9)) for _ in range(6)])}"
                     otp = str(random.randint(100000, 999999))
                     msg_text = f"<#> {otp} is your {app_name} verification code."
@@ -992,10 +1113,7 @@ async def fake_sms_generator_loop(app):
                         f"👤 *Sender:* `{app_name}`\n"
                         f"💬 *Full Message:* `{msg_text}`"
                     )
-                    channel_keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton(f"📋 Copy OTP: {otp}", copy_text=CopyTextButton(text=str(otp)))],
-                        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")]
-                    ])
+                    channel_keyboard = await build_channel_keyboard(app.bot, otp, include_bot_button=True)
                     try:
                         await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                     except Exception as err:
@@ -1155,10 +1273,10 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
     if data.startswith("get_srv_"):
         await query.answer()
-        selected_service = data.replace("get_srv_", "").strip()
-        all_ranges = db_get_all_managed_ranges()
-        
-        matching_ranges = [r for r in all_ranges if r["service"].upper() == selected_service.upper()]
+        selected_service = data.replace("get_srv_", "", 1)
+        all_ranges = await get_live_and_managed_ranges()
+
+        matching_ranges = [r for r in all_ranges if r["service"] == selected_service][:10]
 
         if not matching_ranges:
             await query.edit_message_text(f"⚠ No ranges found for service `{selected_service}`.", parse_mode="Markdown")
@@ -1166,7 +1284,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
         country_buttons = [
             InlineKeyboardButton(
-                f"{r['flag']} {r['country']} ({r['range']})", 
+                f"{r['flag']} {r['country']} ({r['range']})",
                 callback_data=f"prov_{r.get('provider', 'zebrasms')}_{r['range']}"
             )
             for r in matching_ranges
@@ -1175,7 +1293,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
         await query.edit_message_text(
-            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country to allocate number:*",
+            f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country / Active Range to allocate number:*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -1183,12 +1301,14 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
     elif data == "back_to_services":
         await query.answer()
-        all_ranges = db_get_all_managed_ranges()
-        if not all_ranges:
-            await query.edit_message_text("⚠ No ranges configured yet.", parse_mode="Markdown")
+        all_ranges = await get_live_and_managed_ranges()
+        services = sorted(list(set(
+            r["service"] for r in all_ranges if is_allowed_social_sender(r["service"])
+        )))
+        if not services:
+            await query.edit_message_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
             return
 
-        services = sorted(list(set(r["service"] for r in all_ranges)))
         keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
         await query.edit_message_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -1196,7 +1316,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
     elif data.startswith("prov_") or data.startswith("change_"):
         await query.answer()
         is_change = data.startswith("change_")
-        clean_data = data.replace("change_", "") if is_change else data.replace("prov_", "")
+        clean_data = data.replace("change_", "", 1) if is_change else data.replace("prov_", "", 1)
 
         parts = clean_data.split("_", 1)
         chosen_provider = parts[0]
@@ -1208,17 +1328,17 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             except Exception as e:
                 logging.error(f"Error deleting old number message: {e}")
 
-        all_ranges = db_get_all_managed_ranges()
+        all_ranges = await get_live_and_managed_ranges()
         matched_item = next(
-            (r for r in all_ranges if r["range"] == selected_range), 
+            (r for r in all_ranges if r["range"] == selected_range),
             {}
         )
-        
+
         c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
 
         loading_msg = await context.bot.send_message(
-            chat_id=chat_id, 
-            text=f"⏳ Requesting 2 fresh numbers for {flag_icon} range `{selected_range}`...", 
+            chat_id=chat_id,
+            text=f"⏳ Requesting 2 fresh numbers for {flag_icon} range `{selected_range}`...",
             parse_mode="Markdown"
         )
 
@@ -1323,7 +1443,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name or "User"
     db_add_user(user_id)
-    
+
     welcome_msg = (
         f"👋 *ANU PREMIUM OTP BOT*\n\n"
         f"Welcome, *{user_name}*! 👋\n\n"
@@ -1421,13 +1541,13 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if context.user_data.get("waiting_for_range"):
         prov = context.user_data.get("waiting_for_range")
-        
+
         if text.count("|") != 2:
             await update.message.reply_text("⚠️ **Format Error!** Use: `Service | Country | Range`", parse_mode="Markdown")
             return
 
         parts = [p.strip() for p in text.split("|")]
-        service = parts[0].upper()
+        service = parts[0]
         country = parts[1]
         range_val = parts[2]
 
@@ -1444,12 +1564,14 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if "Get Number" in text:
-        all_ranges = db_get_all_managed_ranges()
-        if not all_ranges:
-            await update.message.reply_text("⚠ No ranges configured yet. Add ranges via `/admin`.", parse_mode="Markdown")
+        all_ranges = await get_live_and_managed_ranges()
+        services = sorted(list(set(
+            r["service"] for r in all_ranges if is_allowed_social_sender(r["service"])
+        )))
+        if not services:
+            await update.message.reply_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
             return
 
-        services = sorted(list(set(r["service"] for r in all_ranges)))
         keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
         await update.message.reply_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
