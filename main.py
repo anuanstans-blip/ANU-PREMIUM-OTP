@@ -46,9 +46,6 @@ ZEBRASMS_BASE_URL = os.getenv("ZEBRASMS_BASE_URL", "https://api.zebrasms.com/api
 MKNETWORK_API_KEY = os.getenv("MKNETWORK_API_KEY", "").strip(" '\"")
 MKNETWORK_BASE_URL = os.getenv("MKNETWORK_BASE_URL", "https://mknetworkbd.com/api/v3/public").strip(" '\"")
 
-SLVN_API_KEY = os.getenv("SLVN_API_KEY", "").strip(" '\"")
-SLVN_BASE_URL = os.getenv("SLVN_BASE_URL", "http://slvirtualnumber.com").strip(" '\"")
-
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans").strip(" '\"")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip(" '\"")
@@ -74,7 +71,6 @@ logging.basicConfig(
 active_allocations = {}
 seen_messages = set()
 seen_mk_sms_ids = set()
-seen_slvn_sms_ids = set()
 MAX_SEEN_SIZE = 5000
 
 # 30-minute per-country broadcast state for DB-saved ranges
@@ -101,7 +97,6 @@ _liveaccess_cache = {
     "ranges": [],
     "zebra_live_rows": [],
     "mk_access_items": [],
-    "slvn_items": [],
     "updated_at": 0.0,
 }
 _liveaccess_lock = asyncio.Lock()
@@ -111,20 +106,28 @@ DEFAULT_RANGES_ZEBRA = [
     {"service": "WhatsApp", "country": "Ivory Coast", "flag": "🇨🇮", "range": "22501XXX", "provider": "zebrasms"},
 ]
 
+# --- Social Media Sender ID Filter ---
+BLOCKED_NON_SOCIAL_SENDERS = {
+    "binance", "bybit", "kucoin", "okx", "coinbase", "kraken", "huobi", "htx",
+    "mexc", "gate", "bitget", "crypto", "paypal", "wise", "revolut", "cashapp",
+}
+
+SOCIAL_MEDIA_KEYWORDS = (
+    "facebook", "fb", "whatsapp", "wa", "instagram", "insta", "ig",
+    "telegram", "tg", "tiktok", "snapchat", "snap", "twitter", "x.com",
+    "linkedin", "viber", "line", "zalo", "wechat", "kakao", "messenger",
+    "threads", "discord", "imo",
+)
+
 
 def is_allowed_social_sender(sender_name: str) -> bool:
-    """All platforms/senders are allowed without platform or sender exceptions."""
-    return bool((sender_name or "").strip())
-
-
-def build_services_keyboard(services: list[str]) -> InlineKeyboardMarkup:
-    """Builds inline buttons with 2 services per row."""
-    service_buttons = [
-        InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")
-        for srv in services
-    ]
-    rows = [service_buttons[i:i + 2] for i in range(0, len(service_buttons), 2)]
-    return InlineKeyboardMarkup(rows)
+    name = (sender_name or "").strip()
+    if not name:
+        return False
+    lower = name.lower()
+    if any(blocked in lower for blocked in BLOCKED_NON_SOCIAL_SENDERS):
+        return False
+    return any(kw in lower for kw in SOCIAL_MEDIA_KEYWORDS)
 
 
 # --- Global Name Generator Helper (1,000 First Names & 1,000 Last Names) ---
@@ -1010,120 +1013,18 @@ class MKNetworkClient:
             return {"meta": {"code": -500, "status": "error", "error": str(e)}}
 
 
-# --- SL Virtual Number API v1 Client ---
-
-class SLVirtualNumberClient:
-    def __init__(self, api_key: str):
-        self.base_url = SLVN_BASE_URL.rstrip("/")
-        self.headers = {
-            "X-API-KEY": api_key,
-            "Content-Type": "application/json",
-        }
-        self.client = httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=6.0,
-            limits=httpx.Limits(max_keepalive_connections=50, max_connections=200),
-        )
-
-    async def get_available_services(self, service: str = "any", country_code: str = None, flat: bool = False) -> dict:
-        try:
-            params = {"service": service, "flat": "true" if flat else "false"}
-            if country_code:
-                params["countryCode"] = country_code
-            response = await self.client.get(
-                f"{self.base_url}/api/v1/developer/available-services",
-                headers=self.headers,
-                params=params,
-            )
-            if response.status_code != 200:
-                logging.warning(f"[slvn available-services] HTTP {response.status_code}: {response.text[:200]}")
-                return {"status": "error", "data": []}
-            return response.json()
-        except Exception as e:
-            logging.error(f"[slvn available-services] Request error: {e}")
-            return {"status": "error", "data": []}
-
-    async def get_available_countries(self, service: str = "any") -> dict:
-        try:
-            response = await self.client.get(
-                f"{self.base_url}/api/v1/developer/available-countries",
-                headers=self.headers,
-                params={"service": service},
-            )
-            if response.status_code != 200:
-                logging.warning(f"[slvn available-countries] HTTP {response.status_code}: {response.text[:200]}")
-                return {"status": "error", "data": []}
-            return response.json()
-        except Exception as e:
-            logging.error(f"[slvn available-countries] Request error: {e}")
-            return {"status": "error", "data": []}
-
-    async def rent_number(self, service: str, range_prefix: str, country_code: str = None, tag: str = None) -> dict:
-        try:
-            clean_digits = re.sub(r"\D", "", range_prefix or "")
-            payload = {
-                "service": service or "ANY (All Services)",
-                "rangePrefix": clean_digits,
-            }
-            if country_code:
-                payload["countryCode"] = country_code
-            if tag:
-                payload["tag"] = tag
-            response = await self.client.post(
-                f"{self.base_url}/api/v1/developer/rent",
-                headers=self.headers,
-                json=payload,
-            )
-            print(f"SLVN rent Response [{response.status_code}]: {response.text}")
-            if response.status_code != 200:
-                return {"status": "error", "message": f"HTTP {response.status_code}"}
-            return response.json()
-        except Exception as e:
-            print(f"SLVN rent Exception: {e}")
-            return {"status": "error", "message": str(e)}
-
-    async def get_otp_monitor(self, limit: int = 100, service: str = "ANY", tag: str = None) -> dict:
-        try:
-            params = {"limit": limit, "service": service}
-            if tag:
-                params["tag"] = tag
-            response = await self.client.get(
-                f"{self.base_url}/api/v1/developer/otp-monitor",
-                headers=self.headers,
-                params=params,
-            )
-            if response.status_code != 200:
-                logging.warning(f"[slvn otp-monitor] HTTP {response.status_code}: {response.text[:200]}")
-                return {"status": "error", "data": []}
-            return response.json()
-        except Exception as e:
-            logging.error(f"[slvn otp-monitor] Request error: {e}")
-            return {"status": "error", "data": []}
-
-    async def check_otp(self, rental_id: str) -> dict:
-        try:
-            response = await self.client.get(
-                f"{self.base_url}/api/v1/developer/check-otp/{rental_id}",
-                headers=self.headers,
-            )
-            if response.status_code != 200:
-                logging.warning(f"[slvn check-otp] HTTP {response.status_code}: {response.text[:200]}")
-                return {"status": "error", "data": {}}
-            return response.json()
-        except Exception as e:
-            logging.error(f"[slvn check-otp] Request error: {e}")
-            return {"status": "error", "data": {}}
-
-
 zebrasms_client = ZebraSMSClient(ZEBRASMS_API_KEY) if ZEBRASMS_API_KEY else None
 mknetwork_client = MKNetworkClient(MKNETWORK_API_KEY) if MKNETWORK_API_KEY else None
-slvn_client = SLVirtualNumberClient(SLVN_API_KEY) if SLVN_API_KEY else None
 
 
 async def _build_live_and_managed_ranges() -> list:
     """
-    Combines saved DB/fallback ranges with dynamic auto-ranges from ZebraSMS,
-    MK Network v3, and SL Virtual Number v1 across all platforms/senders.
+    Combines saved DB/fallback ranges with live ranges from ZebraSMS and MK Network v3:
+    - Keeps both DB managed ranges and live auto-ranges without DB ranges starving live slots.
+    - Retains last known live rows if a single API poll fails or returns empty.
+    - Keeps exact sender casing (does not combine 'FACEBOOK' and 'Facebook').
+    - Ignores duplicate ranges for the same sender ID.
+    - Caps live auto-ranges at 10 per sender ID while keeping saved DB ranges visible.
     """
     per_sender_ranges = {}
     per_sender_seen = {}
@@ -1136,19 +1037,18 @@ async def _build_live_and_managed_ranges() -> list:
         provider: str,
         from_db: bool,
         enforce_cap: bool = True,
-        country_code: str = "",
-        tag: str = "",
     ) -> bool:
         srv_clean = (srv or "").strip()
         rng_clean = (rng or "").strip()
         if not srv_clean or not rng_clean:
             return False
+        if not from_db and not is_allowed_social_sender(srv_clean):
+            return False
 
         per_sender_ranges.setdefault(srv_clean, [])
         per_sender_seen.setdefault(srv_clean, set())
 
-        dedupe_key = f"{provider}:{rng_clean}" if from_db else rng_clean
-        if dedupe_key in per_sender_seen[srv_clean]:
+        if rng_clean in per_sender_seen[srv_clean]:
             return False
 
         if enforce_cap:
@@ -1157,7 +1057,7 @@ async def _build_live_and_managed_ranges() -> list:
                 return False
 
         c_name, detected_flag = auto_detect_country_and_flag(country, rng_clean)
-        per_sender_seen[srv_clean].add(dedupe_key)
+        per_sender_seen[srv_clean].add(rng_clean)
         per_sender_ranges[srv_clean].append({
             "service": srv_clean,
             "country": c_name,
@@ -1165,8 +1065,6 @@ async def _build_live_and_managed_ranges() -> list:
             "range": rng_clean,
             "provider": provider or "zebrasms",
             "from_db": from_db,
-            "country_code": country_code or "",
-            "tag": tag or "",
         })
         return True
 
@@ -1183,7 +1081,7 @@ async def _build_live_and_managed_ranges() -> list:
             enforce_cap=False,
         )
 
-    # 2. Fetch dynamic auto-ranges from ZebraSMS (/publicapi/liveaccess)
+    # 2. Fetch live ranges from ZebraSMS (/publicapi/liveaccess)
     zebra_live_rows = list(_liveaccess_cache.get("zebra_live_rows") or [])
     if zebrasms_client:
         res = await zebrasms_client.get_live_access()
@@ -1200,7 +1098,7 @@ async def _build_live_and_managed_ranges() -> list:
     live_added = 0
     for row in zebra_live_rows:
         srv = (row.get("sender") or "").strip()
-        if not srv:
+        if not srv or not is_allowed_social_sender(srv):
             continue
         for rng in (row.get("ranges") or []):
             if add_range_entry(
@@ -1214,7 +1112,7 @@ async def _build_live_and_managed_ranges() -> list:
             ):
                 live_added += 1
 
-    # 3. Fetch dynamic auto-ranges from MK Network v3 (/access_list)
+    # 3. Fetch live ranges from MK Network v3 (/access_list)
     mk_items = list(_liveaccess_cache.get("mk_access_items") or [])
     if mknetwork_client:
         mk_res = await mknetwork_client.get_access_list(limit=200, offset=0)
@@ -1242,7 +1140,7 @@ async def _build_live_and_managed_ranges() -> list:
         rng_list = item.get("ranges")
         if isinstance(rng_list, list) and rng_list:
             for rng in rng_list:
-                if srv:
+                if srv and is_allowed_social_sender(srv):
                     if add_range_entry(
                         srv=srv,
                         rng=str(rng),
@@ -1255,7 +1153,7 @@ async def _build_live_and_managed_ranges() -> list:
                         live_added += 1
         else:
             rng_single = str(item.get("range") or item.get("prefix") or "").strip()
-            if srv and rng_single:
+            if srv and rng_single and is_allowed_social_sender(srv):
                 if add_range_entry(
                     srv=srv,
                     rng=rng_single,
@@ -1267,55 +1165,9 @@ async def _build_live_and_managed_ranges() -> list:
                 ):
                     live_added += 1
 
-    # 4. Fetch dynamic auto-ranges from SL Virtual Number v1 (/api/v1/developer/available-services)
-    slvn_items = list(_liveaccess_cache.get("slvn_items") or [])
-    if slvn_client:
-        slvn_res = await slvn_client.get_available_services(service="any", flat=False)
-        if isinstance(slvn_res, dict) and slvn_res.get("status") == "success":
-            fetched_slvn = slvn_res.get("data", [])
-            if isinstance(fetched_slvn, list) and fetched_slvn:
-                slvn_items = fetched_slvn
-                _liveaccess_cache["slvn_items"] = fetched_slvn
-            elif slvn_items:
-                logging.warning("[slvn available-services] Empty items returned; preserving previous SLVN live ranges.")
-        elif slvn_items:
-            logging.warning("[slvn available-services] API error/rate-limit; preserving previous SLVN live ranges.")
-
-    for srv_entry in slvn_items:
-        if not isinstance(srv_entry, dict):
-            continue
-        srv_name = (srv_entry.get("service") or srv_entry.get("code") or "").strip()
-        if not srv_name:
-            continue
-        countries = srv_entry.get("countries") or []
-        if isinstance(countries, list) and countries:
-            for c_entry in countries:
-                if not isinstance(c_entry, dict):
-                    continue
-                c_name = (c_entry.get("country") or "").strip()
-                c_code = (c_entry.get("countryCode") or "").strip()
-                c_flag = (c_entry.get("flag") or "").strip()
-                prefix = str(c_entry.get("prefix") or "").strip()
-                tags = c_entry.get("tags") or []
-                first_tag = str(tags[0]).strip() if isinstance(tags, list) and tags else str(c_entry.get("tag") or "").strip()
-                rng_label = f"{prefix}XXX" if prefix and not prefix.endswith("X") else prefix
-                if rng_label:
-                    if add_range_entry(
-                        srv=srv_name,
-                        rng=rng_label,
-                        country=c_name,
-                        flag=c_flag,
-                        provider="slvirtualnumber",
-                        from_db=False,
-                        enforce_cap=True,
-                        country_code=c_code,
-                        tag=first_tag,
-                    ):
-                        live_added += 1
-
     logging.info(
         f"[ranges] zebra_rows={len(zebra_live_rows)}, mk_items={len(mk_items)}, "
-        f"slvn_items={len(slvn_items)}, db_rows={len(managed_rows)}, live_added={live_added}"
+        f"db_rows={len(managed_rows)}, live_added={live_added}"
     )
 
     combined = []
@@ -1561,7 +1413,6 @@ async def dispatch_consumer_loop(app):
             country_name = allocation_info["country"]
             flag_icon = allocation_info["flag"]
             user_fname = allocation_info.get("first_name", "User")
-            resolved_sender = (sender or allocation_info.get("service") or "OTP").strip()
 
             dm_text = (
                 f"📩 *Hey {user_fname}, your OTP has arrived!*\n\n"
@@ -1583,7 +1434,7 @@ async def dispatch_consumer_loop(app):
                     "📢 *ANU OTP RECEIVED*\n\n"
                     f"📱 *To Number:* `{masked_num}`\n"
                     f"{flag_icon} *Country:* {country_name}\n"
-                    f"👤 *Sender:* `{resolved_sender}`\n"
+                    f"👤 *Sender:* `{sender}`\n"
                     f"💬 *Full Message:* `{msg_text}`"
                 )
                 channel_keyboard = await build_channel_keyboard(app.bot, otp_code, include_bot_button=True)
@@ -1598,7 +1449,7 @@ async def dispatch_consumer_loop(app):
                     target_number=target_number,
                     country_name=country_name,
                     flag_icon=flag_icon,
-                    sender=resolved_sender,
+                    sender=sender,
                     otp_code=otp_code,
                     msg_text=msg_text,
                 )
@@ -1615,7 +1466,7 @@ async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, ms
     await otp_dispatch_queue.put((allocation_info, target_number, otp_code, sender, msg_text))
 
 
-# --- Global Checker Loops polling ZebraSMS, MK Network v3, and SL Virtual Number v1 ---
+# --- Global Checker Loops polling ZebraSMS and MK Network v3 ---
 async def global_zebrasms_poller(app):
     """Polls ZebraSMS /publicapi/getupdate endpoint and dispatches messages to matching active allocations."""
     while True:
@@ -1627,7 +1478,7 @@ async def global_zebrasms_poller(app):
                     for row in rows:
                         target_num = row.get("number") or ""
                         msg_text = row.get("message", "")
-                        sender = row.get("sender") or "UNKNOWN"
+                        sender = row.get("sender", "UNKNOWN")
                         otp_code = extract_code(msg_text)
 
                         for alloc_key, info in list(active_allocations.items()):
@@ -1705,59 +1556,6 @@ async def global_mknetwork_poller(app):
         await asyncio.sleep(3.5)
 
 
-async def global_slvn_poller(app):
-    """Polls SL Virtual Number v1 /api/v1/developer/otp-monitor for active rentals."""
-    while True:
-        try:
-            if slvn_client and active_allocations:
-                slvn_entries = [
-                    (alloc_key, info)
-                    for alloc_key, info in list(active_allocations.items())
-                    if info.get("provider") == "slvirtualnumber"
-                ]
-                if slvn_entries:
-                    by_rental_id = {
-                        str(info["rental_id"]): (alloc_key, info)
-                        for alloc_key, info in slvn_entries
-                        if info.get("rental_id")
-                    }
-                    by_digits = {
-                        re.sub(r"\D", "", info.get("number") or ""): (alloc_key, info)
-                        for alloc_key, info in slvn_entries
-                        if re.sub(r"\D", "", info.get("number") or "")
-                    }
-
-                    res = await slvn_client.get_otp_monitor(limit=100, service="ANY")
-                    if isinstance(res, dict) and res.get("status") == "success":
-                        rows = res.get("data", []) or []
-                        for row in rows:
-                            if not isinstance(row, dict):
-                                continue
-                            msg_key = str(row.get("id") or f"{row.get('rentalId')}_{row.get('otpCode')}_{row.get('receivedAt')}")
-                            if len(seen_slvn_sms_ids) > MAX_SEEN_SIZE:
-                                seen_slvn_sms_ids.clear()
-                            if msg_key in seen_slvn_sms_ids:
-                                continue
-
-                            rental_id = str(row.get("rentalId") or "")
-                            row_digits = re.sub(r"\D", "", row.get("phoneNumber") or "")
-                            match = by_rental_id.get(rental_id) or by_digits.get(row_digits)
-                            if not match:
-                                continue
-
-                            seen_slvn_sms_ids.add(msg_key)
-                            alloc_key, info = match
-                            target_num = row.get("phoneNumber") or info.get("number") or ""
-                            full_sms = row.get("fullSms") or ""
-                            otp_code = str(row.get("otpCode") or extract_code(full_sms))
-                            sender_cli = str(row.get("senderCli") or row.get("service") or info.get("service") or "SLVN")
-                            await dispatch_otp(app, info, target_num, otp_code, sender_cli, full_sms)
-        except Exception as e:
-            logging.error(f"Error in SLVN global poller: {e}")
-
-        await asyncio.sleep(3.0)
-
-
 async def fake_sms_generator_loop(app):
     while True:
         try:
@@ -1815,10 +1613,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🌐 MK Network", callback_data="admin_prov_mknetwork"),
         ],
         [
-            InlineKeyboardButton("🇸🇱 SL Virtual", callback_data="admin_prov_slvirtualnumber"),
             InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
-        ],
-        [
             InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
         ]
     ]
@@ -1843,10 +1638,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if data.startswith("admin_prov_"):
         prov = data.replace("admin_prov_", "")
-        prov_label = {
-            "mknetwork": "MK Network",
-            "slvirtualnumber": "SL Virtual Number",
-        }.get(prov, "ZebraSMS")
+        prov_label = "MK Network" if prov == "mknetwork" else "ZebraSMS"
         context.user_data["admin_provider"] = prov
         managed_ranges = await asyncio.to_thread(db_get_managed_ranges, prov)
 
@@ -1881,10 +1673,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 InlineKeyboardButton("🌐 MK Network", callback_data="admin_prov_mknetwork"),
             ],
             [
-                InlineKeyboardButton("🇸🇱 SL Virtual", callback_data="admin_prov_slvirtualnumber"),
                 InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
-            ],
-            [
                 InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
             ]
         ]
@@ -1899,10 +1688,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data.startswith("admin_add_"):
         prov = data.replace("admin_add_", "")
-        prov_label = {
-            "mknetwork": "MK Network",
-            "slvirtualnumber": "SL Virtual Number",
-        }.get(prov, "ZebraSMS")
+        prov_label = "MK Network" if prov == "mknetwork" else "ZebraSMS"
         context.user_data["waiting_for_range"] = prov
         context.user_data["waiting_for_broadcast"] = False
         await query.message.reply_text(
@@ -1957,34 +1743,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("🗑 **All configured ranges cleared.**")
 
 
-async def _allocate_single_provider_number(
-    provider: str,
-    range_val: str,
-    service_name: str = "OTP",
-    country_code: str = "",
-    tag: str = "",
-) -> tuple[str, str, str | None, int | str | None] | None:
-    """Requests one number from ZebraSMS, MK Network v3, or SL Virtual Number v1."""
-    if provider == "slvirtualnumber" and slvn_client:
-        res = await slvn_client.rent_number(
-            service=service_name,
-            range_prefix=range_val,
-            country_code=country_code or None,
-            tag=tag or None,
-        )
-        if isinstance(res, dict) and res.get("status") == "success":
-            row = res.get("data")
-            if isinstance(row, list) and row:
-                row = row[0]
-            if isinstance(row, dict):
-                num_val = row.get("phoneNumber") or row.get("number")
-                rental_id = row.get("rentalId")
-                country_val = row.get("country")
-                if num_val:
-                    alloc_key = f"slvn_{rental_id}" if rental_id else num_val
-                    return alloc_key, num_val, country_val, rental_id
-        return None
-
+async def _allocate_single_provider_number(provider: str, range_val: str) -> tuple[str, str, str | None, int | None] | None:
+    """Requests one number from ZebraSMS or MK Network v3 and normalizes the result."""
     if provider == "mknetwork" and mknetwork_client:
         res = await mknetwork_client.get_number(range_val=range_val)
         if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
@@ -2050,17 +1810,14 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         await query.answer()
         all_ranges = await get_live_and_managed_ranges()
         services = sorted(list(set(
-            r["service"] for r in all_ranges if is_allowed_social_sender(r["service"])
+            r["service"] for r in all_ranges if r.get("from_db") or is_allowed_social_sender(r["service"])
         )))
         if not services:
-            await query.edit_message_text("⚠ No active ranges available right now.", parse_mode="Markdown")
+            await query.edit_message_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
             return
 
-        await query.edit_message_text(
-            "📱 *Select a Service:*",
-            parse_mode="Markdown",
-            reply_markup=build_services_keyboard(services),
-        )
+        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
+        await query.edit_message_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     elif data.startswith("prov_") or data.startswith("change_"):
@@ -2095,28 +1852,16 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         allocated_results = []
         await asyncio.sleep(0.3)
         raw_allocs = await asyncio.gather(
-            _allocate_single_provider_number(
-                chosen_provider,
-                selected_range,
-                service_name=matched_item.get("service", "OTP"),
-                country_code=matched_item.get("country_code", ""),
-                tag=matched_item.get("tag", ""),
-            ),
-            _allocate_single_provider_number(
-                chosen_provider,
-                selected_range,
-                service_name=matched_item.get("service", "OTP"),
-                country_code=matched_item.get("country_code", ""),
-                tag=matched_item.get("tag", ""),
-            ),
+            _allocate_single_provider_number(chosen_provider, selected_range),
+            _allocate_single_provider_number(chosen_provider, selected_range),
         )
         seen_nums = set()
         for entry in raw_allocs:
             if entry:
-                alloc_key, num_val, row_country, req_or_rental_id = entry
+                alloc_key, num_val, row_country, req_id = entry
                 if num_val and num_val not in seen_nums:
                     seen_nums.add(num_val)
-                    allocated_results.append((alloc_key, num_val, row_country, req_or_rental_id))
+                    allocated_results.append((alloc_key, num_val, row_country, req_id))
 
         if allocated_results:
             first_entry = allocated_results[0]
@@ -2126,24 +1871,22 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             rand_fname, rand_lname = generate_random_english_name()
             number_copy_buttons = []
 
-            for alloc_key, allocated_num, row_country, req_or_rental_id in allocated_results:
+            for alloc_key, allocated_num, row_country, req_id in allocated_results:
                 if alloc_key and allocated_num:
                     num_c_name, num_flag = auto_detect_country_and_flag(
                         row_country if row_country else final_country_name,
                         allocated_num,
                     )
-                    alloc_record = {
+                    active_allocations[alloc_key] = {
                         "chat_id": chat_id,
                         "country": num_c_name,
                         "flag": num_flag,
                         "number": allocated_num,
                         "provider": chosen_provider,
                         "service": matched_item.get("service", "OTP"),
-                        "request_id": req_or_rental_id if chosen_provider == "mknetwork" else None,
-                        "rental_id": req_or_rental_id if chosen_provider == "slvirtualnumber" else None,
+                        "request_id": req_id,
                         "first_name": rand_fname,
                     }
-                    active_allocations[alloc_key] = alloc_record
                     number_copy_buttons.append(
                         [InlineKeyboardButton(f"📱 {allocated_num}", copy_text=CopyTextButton(text=str(allocated_num)))]
                     )
@@ -2352,17 +2095,14 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if "Get Number" in text:
         all_ranges = await get_live_and_managed_ranges()
         services = sorted(list(set(
-            r["service"] for r in all_ranges if is_allowed_social_sender(r["service"])
+            r["service"] for r in all_ranges if r.get("from_db") or is_allowed_social_sender(r["service"])
         )))
         if not services:
-            await update.message.reply_text("⚠ No active ranges available right now.", parse_mode="Markdown")
+            await update.message.reply_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
             return
 
-        await update.message.reply_text(
-            "📱 *Select a Service:*",
-            parse_mode="Markdown",
-            reply_markup=build_services_keyboard(services),
-        )
+        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
+        await update.message.reply_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif "Active Engine" in text:
         await update.message.reply_text("⚡ Active delivery engines are online and ready.", parse_mode="Markdown")
@@ -2411,7 +2151,6 @@ async def _start_background_workers(application) -> None:
     application.create_task(dispatch_consumer_loop(application))
     application.create_task(global_zebrasms_poller(application))
     application.create_task(global_mknetwork_poller(application))
-    application.create_task(global_slvn_poller(application))
     application.create_task(fake_sms_generator_loop(application))
     application.create_task(liveaccess_auto_refresh_loop())
 
@@ -2440,5 +2179,5 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.StatusUpdate.ALL, handle_group_chat_tracking))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with high-concurrency ZebraSMS + MK Network v3 + SL Virtual Number integration...")
+    print("🤖 Bot running with high-concurrency ZebraSMS + MK Network v3 integration...")
     app.run_polling(drop_pending_updates=True)
