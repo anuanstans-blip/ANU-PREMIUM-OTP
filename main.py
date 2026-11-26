@@ -77,6 +77,7 @@ LIVEACCESS_CACHE_TTL_SECONDS = 45.0
 LIVEACCESS_REFRESH_INTERVAL_SECONDS = 30.0
 _liveaccess_cache = {
     "ranges": [],
+    "live_rows": [],
     "updated_at": 0.0,
 }
 _liveaccess_lock = asyncio.Lock()
@@ -519,9 +520,16 @@ def db_get_all_managed_ranges() -> list:
         return []
 
 
-def db_add_managed_range(service: str, country: str, flag: str, range_val: str, provider: str):
+def db_add_managed_range(service: str, country: str, flag: str, range_val: str, provider: str) -> bool:
     if not supabase:
-        return
+        DEFAULT_RANGES_ZEBRA.append({
+            "service": service,
+            "country": country,
+            "flag": flag,
+            "range": range_val,
+            "provider": provider,
+        })
+        return True
     try:
         data = {
             "service": service,
@@ -531,12 +539,18 @@ def db_add_managed_range(service: str, country: str, flag: str, range_val: str, 
             "provider": provider,
         }
         supabase.table("managed_ranges_zebra").upsert(data, on_conflict="service, range").execute()
+        return True
     except Exception as e:
         logging.error(f"Error inserting range to Supabase: {e}")
+        return False
 
 
 def db_delete_specific_range(range_val: str, service: str = None):
     if not supabase:
+        DEFAULT_RANGES_ZEBRA[:] = [
+            r for r in DEFAULT_RANGES_ZEBRA
+            if not (r.get("range") == range_val and (not service or r.get("service") == service))
+        ]
         return
     try:
         query = supabase.table("managed_ranges_zebra").delete().eq("range", range_val)
@@ -549,11 +563,19 @@ def db_delete_specific_range(range_val: str, service: str = None):
 
 def db_clear_managed_ranges(provider: str):
     if not supabase:
+        DEFAULT_RANGES_ZEBRA[:] = [
+            r for r in DEFAULT_RANGES_ZEBRA if r.get("provider", "zebrasms") != provider
+        ]
         return
     try:
         supabase.table("managed_ranges_zebra").delete().eq("provider", provider).execute()
     except Exception as e:
         logging.error(f"Error clearing ranges from Supabase: {e}")
+
+
+def invalidate_liveaccess_cache():
+    """Force immediate re-merge on the next range lookup without discarding last good live rows."""
+    _liveaccess_cache["updated_at"] = 0.0
 
 
 # --- Comprehensive World Country & Flag Map ---
@@ -869,32 +891,43 @@ zebrasms_client = ZebraSMSClient(ZEBRASMS_API_KEY) if ZEBRASMS_API_KEY else None
 async def _build_live_and_managed_ranges() -> list:
     """
     Combines saved DB/fallback ranges with live /publicapi/liveaccess ranges:
-    - Only includes active social media / messaging sender IDs.
+    - Keeps both DB managed ranges and live auto-ranges without DB ranges starving live slots.
+    - Retains last known live rows if a single /publicapi/liveaccess poll fails or returns empty.
     - Keeps exact sender casing (does not combine 'FACEBOOK' and 'Facebook').
     - Ignores duplicate ranges for the same sender ID.
-    - Caps at 10 active ranges per sender ID (ignores 11th+).
+    - Caps live auto-ranges at 10 per sender ID while keeping saved DB ranges visible.
     """
     per_sender_ranges = {}
     per_sender_seen = {}
 
-    def add_range_entry(srv: str, rng: str, country: str, flag: str, provider: str, from_db: bool):
+    def add_range_entry(
+        srv: str,
+        rng: str,
+        country: str,
+        flag: str,
+        provider: str,
+        from_db: bool,
+        enforce_cap: bool = True,
+    ) -> bool:
         srv_clean = (srv or "").strip()
         rng_clean = (rng or "").strip()
         if not srv_clean or not rng_clean:
-            return
-        if not is_allowed_social_sender(srv_clean):
-            return
+            return False
+        if not from_db and not is_allowed_social_sender(srv_clean):
+            return False
 
         per_sender_ranges.setdefault(srv_clean, [])
         per_sender_seen.setdefault(srv_clean, set())
 
         # Ignore duplicate range for the same sender ID
         if rng_clean in per_sender_seen[srv_clean]:
-            return
+            return False
 
-        # Hard limit: max 10 active ranges per sender ID (ignore 11th+)
-        if len(per_sender_ranges[srv_clean]) >= 10:
-            return
+        # Cap live auto-ranges at 10 per sender ID without letting DB ranges starve live slots
+        if enforce_cap:
+            live_count = sum(1 for item in per_sender_ranges[srv_clean] if not item.get("from_db"))
+            if live_count >= 10:
+                return False
 
         c_name, detected_flag = auto_detect_country_and_flag(country, rng_clean)
         per_sender_seen[srv_clean].add(rng_clean)
@@ -906,9 +939,11 @@ async def _build_live_and_managed_ranges() -> list:
             "provider": provider or "zebrasms",
             "from_db": from_db,
         })
+        return True
 
-    # 1. Saved DB / fallback ranges first
-    for r in db_get_all_managed_ranges():
+    # 1. Saved DB / fallback ranges (run in thread so Supabase never blocks the event loop)
+    managed_rows = await asyncio.to_thread(db_get_all_managed_ranges)
+    for r in managed_rows:
         add_range_entry(
             srv=r.get("service", ""),
             rng=r.get("range", ""),
@@ -916,41 +951,46 @@ async def _build_live_and_managed_ranges() -> list:
             flag=r.get("flag", ""),
             provider=r.get("provider", "zebrasms"),
             from_db=True,
+            enforce_cap=False,
         )
 
-    # 2. Merge live delivering ranges from /publicapi/liveaccess
-    fetched_live_ok = False
+    # 2. Fetch live delivering ranges from /publicapi/liveaccess, retaining last good live rows on transient failure
+    live_rows = list(_liveaccess_cache.get("live_rows") or [])
     if zebrasms_client:
         res = await zebrasms_client.get_live_access()
         if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
-            fetched_live_ok = True
-            rows = res.get("data", {}).get("rows", []) or []
-            live_added = 0
-            for row in rows:
-                srv = (row.get("sender") or "").strip()
-                if not srv or not is_allowed_social_sender(srv):
-                    continue
-                for rng in (row.get("ranges") or []):
-                    if len(per_sender_ranges.get(srv, [])) >= 10:
-                        break
-                    before_len = len(per_sender_ranges.get(srv, []))
-                    add_range_entry(
-                        srv=srv,
-                        rng=str(rng),
-                        country="",
-                        flag="",
-                        provider="zebrasms",
-                        from_db=False,
-                    )
-                    if len(per_sender_ranges.get(srv, [])) > before_len:
-                        live_added += 1
-            logging.info(f"[liveaccess] rows={len(rows)}, live_added={live_added}")
+            fetched_rows = res.get("data", {}).get("rows", []) or []
+            if fetched_rows:
+                live_rows = fetched_rows
+                _liveaccess_cache["live_rows"] = fetched_rows
+            elif live_rows:
+                logging.warning("[liveaccess] Empty rows returned; preserving previous live auto-ranges.")
+        elif live_rows:
+            logging.warning("[liveaccess] API error/rate-limit; preserving previous live auto-ranges.")
+
+    live_added = 0
+    for row in live_rows:
+        srv = (row.get("sender") or "").strip()
+        if not srv or not is_allowed_social_sender(srv):
+            continue
+        for rng in (row.get("ranges") or []):
+            if add_range_entry(
+                srv=srv,
+                rng=str(rng),
+                country="",
+                flag="",
+                provider="zebrasms",
+                from_db=False,
+                enforce_cap=True,
+            ):
+                live_added += 1
+    logging.info(f"[liveaccess] rows={len(live_rows)}, db_rows={len(managed_rows)}, live_added={live_added}")
 
     combined = []
     for ranges_list in per_sender_ranges.values():
         combined.extend(ranges_list)
 
-    if fetched_live_ok and combined:
+    if combined:
         _liveaccess_cache["ranges"] = combined
         _liveaccess_cache["updated_at"] = time.monotonic()
 
@@ -1197,6 +1237,8 @@ def get_main_keyboard():
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["waiting_for_range"] = None
+    context.user_data["waiting_for_broadcast"] = False
     user_id = update.effective_user.id
     if ADMIN_ID != 0 and user_id != ADMIN_ID:
         await update.message.reply_text(f"⛔ **Access Denied:** Your Telegram ID `{user_id}` is not configured as admin.", parse_mode="Markdown")
@@ -1233,7 +1275,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if data.startswith("admin_prov_"):
         prov = data.replace("admin_prov_", "")
         context.user_data["admin_provider"] = prov
-        managed_ranges = db_get_managed_ranges(prov)
+        managed_ranges = await asyncio.to_thread(db_get_managed_ranges, prov)
 
         ranges_text = "\n".join(
             [f"• {r['flag']} 🔹 **[{r['service']}]** {r['country']} (`{r['range']}`)" for r in managed_ranges]
@@ -1259,6 +1301,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data == "admin_back_main":
         await query.answer()
+        context.user_data["waiting_for_range"] = None
         keyboard = [
             [
                 InlineKeyboardButton("🦓 ZebraSMS", callback_data="admin_prov_zebrasms"),
@@ -1290,7 +1333,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif data.startswith("admin_del_select_"):
         prov = data.replace("admin_del_select_", "")
         await query.answer()
-        managed_ranges = db_get_managed_ranges(prov)
+        managed_ranges = await asyncio.to_thread(db_get_managed_ranges, prov)
         if not managed_ranges:
             await query.edit_message_text("❌ No active ranges found to delete.")
             return
@@ -1306,7 +1349,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         parts = data.replace("admin_del_", "").split("_", 1)
         if len(parts) == 2:
             srv_to_del, range_to_del = parts[0], parts[1]
-            db_delete_specific_range(range_to_del, service=srv_to_del)
+            await asyncio.to_thread(db_delete_specific_range, range_to_del, srv_to_del)
+            invalidate_liveaccess_cache()
             await query.answer(f"Deleted {srv_to_del} range {range_to_del}", show_alert=True)
             await query.edit_message_text(f"✅ **Range `{range_to_del}` for service `{srv_to_del}` deleted.**", parse_mode="Markdown")
         else:
@@ -1326,7 +1370,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data.startswith("admin_clear_"):
         prov = data.replace("admin_clear_", "")
-        db_clear_managed_ranges(prov)
+        await asyncio.to_thread(db_clear_managed_ranges, prov)
+        invalidate_liveaccess_cache()
         await query.answer("All ZebraSMS ranges cleared!", show_alert=True)
         await query.edit_message_text("🗑 **All configured ZebraSMS ranges cleared.**")
 
@@ -1341,7 +1386,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         selected_service = data.replace("get_srv_", "", 1)
         all_ranges = await get_live_and_managed_ranges()
 
-        matching_ranges = [r for r in all_ranges if r["service"] == selected_service][:10]
+        matching_ranges = [r for r in all_ranges if r["service"] == selected_service]
 
         if not matching_ranges:
             await query.edit_message_text(f"⚠ No ranges found for service `{selected_service}`.", parse_mode="Markdown")
@@ -1368,7 +1413,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         await query.answer()
         all_ranges = await get_live_and_managed_ranges()
         services = sorted(list(set(
-            r["service"] for r in all_ranges if is_allowed_social_sender(r["service"])
+            r["service"] for r in all_ranges if r.get("from_db") or is_allowed_social_sender(r["service"])
         )))
         if not services:
             await query.edit_message_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
@@ -1505,9 +1550,12 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["waiting_for_range"] = None
+    context.user_data["waiting_for_broadcast"] = False
+    context.user_data["waiting_for_2fa"] = False
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name or "User"
-    db_add_user(user_id)
+    asyncio.create_task(asyncio.to_thread(db_add_user, user_id))
 
     welcome_msg = (
         f"👋 *ANU PREMIUM OTP BOT*\n\n"
@@ -1519,11 +1567,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_chat_id = update.effective_chat.id
-    db_add_user(user_chat_id)
+    asyncio.create_task(asyncio.to_thread(db_add_user, user_chat_id))
 
     if context.user_data.get("waiting_for_broadcast"):
         context.user_data["waiting_for_broadcast"] = False
-        all_users = db_get_all_users() or [user_chat_id]
+        all_users = await asyncio.to_thread(db_get_all_users) or [user_chat_id]
         status_msg = await update.message.reply_text(f"⏳ Sending broadcast to {len(all_users)} users...")
 
         success, failed = 0, 0
@@ -1591,6 +1639,11 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     text = update.message.text.strip() if update.message.text else ""
 
+    menu_buttons = ("Get Number", "Active Engine", "Live Feed", "Referrals", "My Profile", "2FA Online", "Support Hub")
+    if any(btn in text for btn in menu_buttons):
+        context.user_data["waiting_for_range"] = None
+        context.user_data["waiting_for_2fa"] = False
+
     if context.user_data.get("waiting_for_2fa"):
         context.user_data["waiting_for_2fa"] = False
         secret_key = text.strip().replace(" ", "")
@@ -1618,20 +1671,29 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         c_name, detected_flag = auto_detect_country_and_flag(country, range_val)
 
-        db_add_managed_range(service, c_name, detected_flag, range_val, provider=prov)
+        saved_ok = await asyncio.to_thread(db_add_managed_range, service, c_name, detected_flag, range_val, prov)
         context.user_data["waiting_for_range"] = None
+        invalidate_liveaccess_cache()
+        await get_live_and_managed_ranges(force_refresh=True)
 
-        await update.message.reply_text(
-            f"✅ **Successfully saved range!**\n📌 Service: `{service}`\n{detected_flag} Country: `{c_name}`\n🔢 Range: `{range_val}`",
-            parse_mode="Markdown",
-            reply_markup=get_main_keyboard(),
-        )
+        if saved_ok:
+            await update.message.reply_text(
+                f"✅ **Successfully saved range!**\n📌 Service: `{service}`\n{detected_flag} Country: `{c_name}`\n🔢 Range: `{range_val}`",
+                parse_mode="Markdown",
+                reply_markup=get_main_keyboard(),
+            )
+        else:
+            await update.message.reply_text(
+                "❌ **Failed to save range to database.** Check Supabase configuration or logs.",
+                parse_mode="Markdown",
+                reply_markup=get_main_keyboard(),
+            )
         return
 
     if "Get Number" in text:
         all_ranges = await get_live_and_managed_ranges()
         services = sorted(list(set(
-            r["service"] for r in all_ranges if is_allowed_social_sender(r["service"])
+            r["service"] for r in all_ranges if r.get("from_db") or is_allowed_social_sender(r["service"])
         )))
         if not services:
             await update.message.reply_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
