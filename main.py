@@ -106,7 +106,7 @@ DEFAULT_RANGES_ZEBRA = [
     {"service": "WhatsApp", "country": "Ivory Coast", "flag": "🇨🇮", "range": "22501XXX", "provider": "zebrasms"},
 ]
 
-# Kept for reference; live auto-ranges from ZebraSMS and MK Network are no longer filtered out by this list.
+# --- Social Media Sender ID Filter ---
 BLOCKED_NON_SOCIAL_SENDERS = {
     "binance", "bybit", "kucoin", "okx", "coinbase", "kraken", "huobi", "htx",
     "mexc", "gate", "bitget", "crypto", "paypal", "wise", "revolut", "cashapp",
@@ -121,8 +121,13 @@ SOCIAL_MEDIA_KEYWORDS = (
 
 
 def is_allowed_social_sender(sender_name: str) -> bool:
-    """Allows any non-empty sender/service name without blocking live auto-ranges."""
-    return bool((sender_name or "").strip())
+    name = (sender_name or "").strip()
+    if not name:
+        return False
+    lower = name.lower()
+    if any(blocked in lower for blocked in BLOCKED_NON_SOCIAL_SENDERS):
+        return False
+    return any(kw in lower for kw in SOCIAL_MEDIA_KEYWORDS)
 
 
 # --- Global Name Generator Helper (1,000 First Names & 1,000 Last Names) ---
@@ -763,7 +768,7 @@ COUNTRY_FLAG_MAP = {
     "france": ("France", "🇫🇷"), "33": ("France", "🇫🇷"),
     "germany": ("Germany", "🇩🇪"), "49": ("Germany", "🇩🇪"),
     "greece": ("Greece", "🇬🇷"), "30": ("Greece", "🇬🇷"),
-    "hungary": ("Hungary", "🇭🇺"), "36": ("Hungary", "🇭🇷"),
+    "hungary": ("Hungary", "🇭🇺"), "36": ("Hungary", "🇭🇺"),
     "iceland": ("Iceland", "🇮🇸"), "354": ("Iceland", "🇮🇸"),
     "ireland": ("Ireland", "🇮🇪"), "353": ("Ireland", "🇮🇪"),
     "italy": ("Italy", "🇮🇹"), "39": ("Italy", "🇮🇹"),
@@ -1015,7 +1020,6 @@ mknetwork_client = MKNetworkClient(MKNETWORK_API_KEY) if MKNETWORK_API_KEY else 
 async def _build_live_and_managed_ranges() -> list:
     """
     Combines saved DB/fallback ranges with live ranges from ZebraSMS and MK Network v3:
-    - Includes all live auto-ranges regardless of sender/platform name.
     - Keeps both DB managed ranges and live auto-ranges without DB ranges starving live slots.
     - Retains last known live rows if a single API poll fails or returns empty.
     - Keeps exact sender casing (does not combine 'FACEBOOK' and 'Facebook').
@@ -1037,6 +1041,8 @@ async def _build_live_and_managed_ranges() -> list:
         srv_clean = (srv or "").strip()
         rng_clean = (rng or "").strip()
         if not srv_clean or not rng_clean:
+            return False
+        if not from_db and not is_allowed_social_sender(srv_clean):
             return False
 
         per_sender_ranges.setdefault(srv_clean, [])
@@ -1092,7 +1098,7 @@ async def _build_live_and_managed_ranges() -> list:
     live_added = 0
     for row in zebra_live_rows:
         srv = (row.get("sender") or "").strip()
-        if not srv:
+        if not srv or not is_allowed_social_sender(srv):
             continue
         for rng in (row.get("ranges") or []):
             if add_range_entry(
@@ -1134,7 +1140,7 @@ async def _build_live_and_managed_ranges() -> list:
         rng_list = item.get("ranges")
         if isinstance(rng_list, list) and rng_list:
             for rng in rng_list:
-                if srv:
+                if srv and is_allowed_social_sender(srv):
                     if add_range_entry(
                         srv=srv,
                         rng=str(rng),
@@ -1147,7 +1153,7 @@ async def _build_live_and_managed_ranges() -> list:
                         live_added += 1
         else:
             rng_single = str(item.get("range") or item.get("prefix") or "").strip()
-            if srv and rng_single:
+            if srv and rng_single and is_allowed_social_sender(srv):
                 if add_range_entry(
                     srv=srv,
                     rng=rng_single,
@@ -1804,10 +1810,10 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         await query.answer()
         all_ranges = await get_live_and_managed_ranges()
         services = sorted(list(set(
-            r["service"] for r in all_ranges if is_allowed_social_sender(r["service"])
+            r["service"] for r in all_ranges if r.get("from_db") or is_allowed_social_sender(r["service"])
         )))
         if not services:
-            await query.edit_message_text("⚠ No active ranges available right now.", parse_mode="Markdown")
+            await query.edit_message_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
             return
 
         keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
@@ -2089,10 +2095,10 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if "Get Number" in text:
         all_ranges = await get_live_and_managed_ranges()
         services = sorted(list(set(
-            r["service"] for r in all_ranges if is_allowed_social_sender(r["service"])
+            r["service"] for r in all_ranges if r.get("from_db") or is_allowed_social_sender(r["service"])
         )))
         if not services:
-            await update.message.reply_text("⚠ No active ranges available right now.", parse_mode="Markdown")
+            await update.message.reply_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
             return
 
         keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
