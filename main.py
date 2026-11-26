@@ -17,6 +17,7 @@ from telegram import (
     InlineKeyboardMarkup,
     CopyTextButton,
 )
+from telegram.error import Forbidden, RetryAfter
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -42,10 +43,21 @@ CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/").strip(" '\"")
 ZEBRASMS_API_KEY = os.getenv("ZEBRASMS_API_KEY", "Q32FDUSCCGF").strip(" '\"")
 ZEBRASMS_BASE_URL = os.getenv("ZEBRASMS_BASE_URL", "https://api.zebrasms.com/api/v1").strip(" '\"")
 
+MKNETWORK_API_KEY = os.getenv("MKNETWORK_API_KEY", "").strip(" '\"")
+MKNETWORK_BASE_URL = os.getenv("MKNETWORK_BASE_URL", "https://mknetworkbd.com/api/v3/public").strip(" '\"")
+
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans").strip(" '\"")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip(" '\"")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip(" '\"")
+
+# Optional comma-separated group chat IDs for 30-minute DB range country broadcasts
+_groups_raw = os.getenv("BROADCAST_GROUP_IDS", "").strip(" '\"")
+known_group_ids: set[int] = {
+    int(gid.strip())
+    for gid in _groups_raw.split(",")
+    if gid.strip().lstrip("-").isdigit()
+}
 
 # Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
@@ -58,7 +70,13 @@ logging.basicConfig(
 # --- Global State & Async Queue ---
 active_allocations = {}
 seen_messages = set()
+seen_mk_sms_ids = set()
 MAX_SEEN_SIZE = 5000
+
+# 30-minute per-country broadcast state for DB-saved ranges
+COUNTRY_BROADCAST_COOLDOWN_SECONDS = 1800.0
+last_country_broadcast_at: dict[str, float] = {}
+_country_broadcast_lock = asyncio.Lock()
 
 # High-throughput asynchronous dispatch queue
 otp_dispatch_queue = asyncio.Queue()
@@ -77,7 +95,8 @@ LIVEACCESS_CACHE_TTL_SECONDS = 45.0
 LIVEACCESS_REFRESH_INTERVAL_SECONDS = 30.0
 _liveaccess_cache = {
     "ranges": [],
-    "live_rows": [],
+    "zebra_live_rows": [],
+    "mk_access_items": [],
     "updated_at": 0.0,
 }
 _liveaccess_lock = asyncio.Lock()
@@ -495,23 +514,54 @@ def db_get_all_users() -> list:
         return []
 
 
-def db_get_managed_ranges(provider: str) -> list:
+def db_add_group(chat_id: int):
+    """Track group chat IDs in memory and Supabase if available."""
+    known_group_ids.add(chat_id)
     if not supabase:
-        return [r for r in DEFAULT_RANGES_ZEBRA if r.get("provider", "zebrasms") == provider]
+        return
     try:
-        response = supabase.table("managed_ranges_zebra").select("*").eq("provider", provider).execute()
-        if response.data:
-            return response.data
-        return []
+        supabase.table("groups").upsert({"chat_id": chat_id}, on_conflict="chat_id").execute()
+    except Exception as e:
+        logging.debug(f"Group table upsert skipped/failed: {e}")
+
+
+def db_get_all_groups() -> list[int]:
+    """Retrieve all known group chat IDs."""
+    groups = set(known_group_ids)
+    if CHANNEL_CHAT_ID and CHANNEL_CHAT_ID < 0:
+        groups.discard(CHANNEL_CHAT_ID)
+    if supabase:
+        try:
+            response = supabase.table("groups").select("chat_id").execute()
+            if response.data:
+                for row in response.data:
+                    if row.get("chat_id"):
+                        groups.add(int(row["chat_id"]))
+        except Exception as e:
+            logging.debug(f"Group table select skipped/failed: {e}")
+    return list(groups)
+
+
+def db_get_managed_ranges(provider: str = None) -> list:
+    if not supabase:
+        if provider:
+            return [r for r in DEFAULT_RANGES_ZEBRA if r.get("provider", "zebrasms") == provider]
+        return list(DEFAULT_RANGES_ZEBRA)
+    try:
+        query = supabase.table("managed_ranges_zebra").select("*")
+        if provider:
+            query = query.eq("provider", provider)
+        response = query.execute()
+        return response.data if response.data else []
     except Exception as e:
         logging.error(f"Error fetching ranges from Supabase: {e}")
         return []
 
 
 def db_get_all_managed_ranges() -> list:
-    """Retrieve all managed ranges for ZebraSMS."""
+    """Retrieve all managed ranges across providers."""
     if not supabase:
-        return DEFAULT_RANGES_ZEBRA
+        return list(DEFAULT_RANGES_ZEBRA)
     try:
         response = supabase.table("managed_ranges_zebra").select("*").execute()
         return response.data if response.data else []
@@ -576,6 +626,19 @@ def db_clear_managed_ranges(provider: str):
 def invalidate_liveaccess_cache():
     """Force immediate re-merge on the next range lookup without discarding last good live rows."""
     _liveaccess_cache["updated_at"] = 0.0
+
+
+def find_matching_db_range(phone_number: str, db_ranges: list[dict]) -> dict | None:
+    """Checks whether an incoming phone number matches a range saved in the database."""
+    target_digits = re.sub(r"\D", "", phone_number or "")
+    if not target_digits:
+        return None
+    for row in db_ranges:
+        rng_raw = (row.get("range") or "").strip()
+        prefix_digits = re.sub(r"\D", "", rng_raw)
+        if prefix_digits and target_digits.startswith(prefix_digits):
+            return row
+    return None
 
 
 # --- Comprehensive World Country & Flag Map ---
@@ -818,7 +881,7 @@ def mask_phone_number(phone: str) -> str:
 
 
 def extract_code(message_text: str) -> str:
-    match = re.search(r"\b\d{4,8}\b", message_text)
+    match = re.search(r"\b\d{4,8}\b", message_text or "")
     return match.group(0) if match else "No code found"
 
 
@@ -846,14 +909,14 @@ class ZebraSMSClient:
                 params=params,
             )
             if response.status_code != 200:
-                logging.warning(f"[liveaccess] HTTP {response.status_code}: {response.text[:200]}")
+                logging.warning(f"[zebrasms liveaccess] HTTP {response.status_code}: {response.text[:200]}")
                 return {"meta": {"code": -500, "error": f"HTTP {response.status_code}"}}
             data = response.json()
             if not isinstance(data, dict) or data.get("meta", {}).get("code") != 0:
-                logging.warning(f"[liveaccess] Non-zero meta: {data}")
+                logging.warning(f"[zebrasms liveaccess] Non-zero meta: {data}")
             return data
         except Exception as e:
-            logging.error(f"[liveaccess] Request error: {e}")
+            logging.error(f"[zebrasms liveaccess] Request error: {e}")
             return {"meta": {"code": -500, "error": str(e)}}
 
     async def get_number(self, range_val: str) -> dict:
@@ -885,14 +948,80 @@ class ZebraSMSClient:
             return {"meta": {"code": -500, "error": str(e)}}
 
 
+# --- MK Network API v3 Client ---
+
+class MKNetworkClient:
+    def __init__(self, api_key: str):
+        self.base_url = MKNETWORK_BASE_URL.rstrip("/")
+        self.headers = {
+            "mknetwork-key": api_key,
+            "Content-Type": "application/json",
+        }
+        self.client = httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=6.0,
+            limits=httpx.Limits(max_keepalive_connections=50, max_connections=200),
+        )
+
+    async def get_access_list(self, limit: int = 200, offset: int = 0) -> dict:
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/access_list",
+                headers=self.headers,
+                params={"limit": limit, "offset": offset},
+            )
+            if response.status_code != 200:
+                logging.warning(f"[mknetwork access_list] HTTP {response.status_code}: {response.text[:200]}")
+                return {"meta": {"code": response.status_code, "status": "error"}}
+            return response.json()
+        except Exception as e:
+            logging.error(f"[mknetwork access_list] Request error: {e}")
+            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
+
+    async def get_number(self, range_val: str) -> dict:
+        try:
+            payload = {"range": range_val}
+            response = await self.client.post(
+                f"{self.base_url}/getnum/number",
+                headers=self.headers,
+                json=payload,
+            )
+            print(f"MKNetwork getnum Response [{response.status_code}]: {response.text}")
+            if response.status_code != 200:
+                return {"meta": {"code": response.status_code, "status": "error"}}
+            return response.json()
+        except Exception as e:
+            print(f"MKNetwork getnum Exception: {e}")
+            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
+
+    async def check_status(self, request_ids: list[int]) -> dict:
+        if not request_ids:
+            return {"meta": {"code": 200, "status": "success"}, "data": {"results": []}}
+        try:
+            payload = {"request_ids": request_ids[:100]}
+            response = await self.client.post(
+                f"{self.base_url}/check/status",
+                headers=self.headers,
+                json=payload,
+            )
+            if response.status_code != 200:
+                logging.warning(f"[mknetwork check/status] HTTP {response.status_code}: {response.text[:200]}")
+                return {"meta": {"code": response.status_code, "status": "error"}}
+            return response.json()
+        except Exception as e:
+            logging.error(f"[mknetwork check/status] Request error: {e}")
+            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
+
+
 zebrasms_client = ZebraSMSClient(ZEBRASMS_API_KEY) if ZEBRASMS_API_KEY else None
+mknetwork_client = MKNetworkClient(MKNETWORK_API_KEY) if MKNETWORK_API_KEY else None
 
 
 async def _build_live_and_managed_ranges() -> list:
     """
-    Combines saved DB/fallback ranges with live /publicapi/liveaccess ranges:
+    Combines saved DB/fallback ranges with live ranges from ZebraSMS and MK Network v3:
     - Keeps both DB managed ranges and live auto-ranges without DB ranges starving live slots.
-    - Retains last known live rows if a single /publicapi/liveaccess poll fails or returns empty.
+    - Retains last known live rows if a single API poll fails or returns empty.
     - Keeps exact sender casing (does not combine 'FACEBOOK' and 'Facebook').
     - Ignores duplicate ranges for the same sender ID.
     - Caps live auto-ranges at 10 per sender ID while keeping saved DB ranges visible.
@@ -919,11 +1048,9 @@ async def _build_live_and_managed_ranges() -> list:
         per_sender_ranges.setdefault(srv_clean, [])
         per_sender_seen.setdefault(srv_clean, set())
 
-        # Ignore duplicate range for the same sender ID
         if rng_clean in per_sender_seen[srv_clean]:
             return False
 
-        # Cap live auto-ranges at 10 per sender ID without letting DB ranges starve live slots
         if enforce_cap:
             live_count = sum(1 for item in per_sender_ranges[srv_clean] if not item.get("from_db"))
             if live_count >= 10:
@@ -941,7 +1068,7 @@ async def _build_live_and_managed_ranges() -> list:
         })
         return True
 
-    # 1. Saved DB / fallback ranges (run in thread so Supabase never blocks the event loop)
+    # 1. Saved DB / fallback ranges
     managed_rows = await asyncio.to_thread(db_get_all_managed_ranges)
     for r in managed_rows:
         add_range_entry(
@@ -954,22 +1081,22 @@ async def _build_live_and_managed_ranges() -> list:
             enforce_cap=False,
         )
 
-    # 2. Fetch live delivering ranges from /publicapi/liveaccess, retaining last good live rows on transient failure
-    live_rows = list(_liveaccess_cache.get("live_rows") or [])
+    # 2. Fetch live ranges from ZebraSMS (/publicapi/liveaccess)
+    zebra_live_rows = list(_liveaccess_cache.get("zebra_live_rows") or [])
     if zebrasms_client:
         res = await zebrasms_client.get_live_access()
         if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
             fetched_rows = res.get("data", {}).get("rows", []) or []
             if fetched_rows:
-                live_rows = fetched_rows
-                _liveaccess_cache["live_rows"] = fetched_rows
-            elif live_rows:
-                logging.warning("[liveaccess] Empty rows returned; preserving previous live auto-ranges.")
-        elif live_rows:
-            logging.warning("[liveaccess] API error/rate-limit; preserving previous live auto-ranges.")
+                zebra_live_rows = fetched_rows
+                _liveaccess_cache["zebra_live_rows"] = fetched_rows
+            elif zebra_live_rows:
+                logging.warning("[zebrasms liveaccess] Empty rows returned; preserving previous live ranges.")
+        elif zebra_live_rows:
+            logging.warning("[zebrasms liveaccess] API error/rate-limit; preserving previous live ranges.")
 
     live_added = 0
-    for row in live_rows:
+    for row in zebra_live_rows:
         srv = (row.get("sender") or "").strip()
         if not srv or not is_allowed_social_sender(srv):
             continue
@@ -984,7 +1111,64 @@ async def _build_live_and_managed_ranges() -> list:
                 enforce_cap=True,
             ):
                 live_added += 1
-    logging.info(f"[liveaccess] rows={len(live_rows)}, db_rows={len(managed_rows)}, live_added={live_added}")
+
+    # 3. Fetch live ranges from MK Network v3 (/access_list)
+    mk_items = list(_liveaccess_cache.get("mk_access_items") or [])
+    if mknetwork_client:
+        mk_res = await mknetwork_client.get_access_list(limit=200, offset=0)
+        if isinstance(mk_res, dict) and mk_res.get("meta", {}).get("code") == 200:
+            raw_data = mk_res.get("data", {})
+            if isinstance(raw_data, list):
+                fetched_mk = raw_data
+            elif isinstance(raw_data, dict):
+                fetched_mk = raw_data.get("rows") or raw_data.get("items") or raw_data.get("ranges") or []
+            else:
+                fetched_mk = []
+            if fetched_mk:
+                mk_items = fetched_mk
+                _liveaccess_cache["mk_access_items"] = fetched_mk
+            elif mk_items:
+                logging.warning("[mknetwork access_list] Empty items returned; preserving previous MK live ranges.")
+        elif mk_items:
+            logging.warning("[mknetwork access_list] API error/rate-limit; preserving previous MK live ranges.")
+
+    for item in mk_items:
+        if not isinstance(item, dict):
+            continue
+        srv = (item.get("sender") or item.get("service") or item.get("operator") or "").strip()
+        country = (item.get("country") or "").strip()
+        rng_list = item.get("ranges")
+        if isinstance(rng_list, list) and rng_list:
+            for rng in rng_list:
+                if srv and is_allowed_social_sender(srv):
+                    if add_range_entry(
+                        srv=srv,
+                        rng=str(rng),
+                        country=country,
+                        flag="",
+                        provider="mknetwork",
+                        from_db=False,
+                        enforce_cap=True,
+                    ):
+                        live_added += 1
+        else:
+            rng_single = str(item.get("range") or item.get("prefix") or "").strip()
+            if srv and rng_single and is_allowed_social_sender(srv):
+                if add_range_entry(
+                    srv=srv,
+                    rng=rng_single,
+                    country=country,
+                    flag="",
+                    provider="mknetwork",
+                    from_db=False,
+                    enforce_cap=True,
+                ):
+                    live_added += 1
+
+    logging.info(
+        f"[ranges] zebra_rows={len(zebra_live_rows)}, mk_items={len(mk_items)}, "
+        f"db_rows={len(managed_rows)}, live_added={live_added}"
+    )
 
     combined = []
     for ranges_list in per_sender_ranges.values():
@@ -1060,6 +1244,112 @@ async def auto_delete_allocation_message(context: ContextTypes.DEFAULT_TYPE, cha
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
         except Exception as e:
             logging.error(f"Error auto-deleting message after 15 min: {e}")
+
+
+async def _safe_send_broadcast_message(
+    bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+) -> bool:
+    """Sends a broadcast message safely while respecting Telegram rate limits and blocked users."""
+    for attempt in range(2):
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=reply_markup,
+            )
+            return True
+        except RetryAfter as err:
+            await asyncio.sleep(float(err.retry_after) + 0.5)
+        except Forbidden:
+            return False
+        except Exception as e:
+            if attempt == 0:
+                await asyncio.sleep(0.2)
+            else:
+                logging.debug(f"Broadcast send error to {chat_id}: {e}")
+                return False
+    return False
+
+
+async def maybe_broadcast_db_range_country_alert(
+    app,
+    target_number: str,
+    country_name: str,
+    flag_icon: str,
+    sender: str,
+    otp_code: str,
+    msg_text: str,
+):
+    """
+    When an OTP matches a DB-saved range and no alert has been sent for that country
+    in the last 30 minutes (or it is a new country), broadcasts to all subscribers,
+    CHANNEL_CHAT_ID, and tracked groups.
+    """
+    db_ranges = await asyncio.to_thread(db_get_all_managed_ranges)
+    matched_db_range = find_matching_db_range(target_number, db_ranges)
+    if not matched_db_range:
+        return
+
+    resolved_country, resolved_flag = auto_detect_country_and_flag(
+        matched_db_range.get("country") or country_name,
+        target_number,
+    )
+    if matched_db_range.get("flag") and matched_db_range.get("flag") != "🌐":
+        resolved_flag = matched_db_range["flag"]
+    elif flag_icon and flag_icon != "🌐":
+        resolved_flag = flag_icon
+
+    country_key = resolved_country.strip().lower()
+    if not country_key or country_key == "unknown":
+        return
+
+    now = time.monotonic()
+    async with _country_broadcast_lock:
+        last_sent = last_country_broadcast_at.get(country_key, 0.0)
+        if last_sent and (now - last_sent) < COUNTRY_BROADCAST_COOLDOWN_SECONDS:
+            return
+        last_country_broadcast_at[country_key] = now
+
+    masked_num = mask_phone_number(target_number)
+    alert_text = (
+        "🌍 *NEW COUNTRY / 30-MIN DB RANGE ALERT* 🌍\n\n"
+        f"{resolved_flag} *Country:* {resolved_country}\n"
+        f"🔢 *DB Range:* `{matched_db_range.get('range', '')}`\n"
+        f"📱 *To Number:* `{masked_num}`\n"
+        f"👤 *Sender:* `{sender}`\n"
+        f"💬 *Full Message:* `{msg_text}`"
+    )
+    alert_keyboard = await build_channel_keyboard(app.bot, otp_code, include_bot_button=True)
+
+    target_chats: list[int] = []
+    seen_targets: set[int] = set()
+
+    if CHANNEL_CHAT_ID:
+        target_chats.append(CHANNEL_CHAT_ID)
+        seen_targets.add(CHANNEL_CHAT_ID)
+
+    for gid in await asyncio.to_thread(db_get_all_groups):
+        if gid not in seen_targets:
+            target_chats.append(gid)
+            seen_targets.add(gid)
+
+    for uid in await asyncio.to_thread(db_get_all_users):
+        if uid not in seen_targets:
+            target_chats.append(uid)
+            seen_targets.add(uid)
+
+    for chat_target in target_chats:
+        await _safe_send_broadcast_message(
+            bot=app.bot,
+            chat_id=chat_target,
+            text=alert_text,
+            reply_markup=alert_keyboard,
+        )
+        await asyncio.sleep(0.04)
 
 
 async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1153,6 +1443,18 @@ async def dispatch_consumer_loop(app):
                 except Exception as err:
                     logging.error(f"Failed to post to channel: {err}")
 
+            asyncio.create_task(
+                maybe_broadcast_db_range_country_alert(
+                    app=app,
+                    target_number=target_number,
+                    country_name=country_name,
+                    flag_icon=flag_icon,
+                    sender=sender,
+                    otp_code=otp_code,
+                    msg_text=msg_text,
+                )
+            )
+
             otp_dispatch_queue.task_done()
         except Exception as e:
             logging.error(f"Error in consumer loop: {e}")
@@ -1164,33 +1466,94 @@ async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, ms
     await otp_dispatch_queue.put((allocation_info, target_number, otp_code, sender, msg_text))
 
 
-# --- Global Checker Loop polling getupdate for all active allocations ---
+# --- Global Checker Loops polling ZebraSMS and MK Network v3 ---
 async def global_zebrasms_poller(app):
     """Polls ZebraSMS /publicapi/getupdate endpoint and dispatches messages to matching active allocations."""
     while True:
         try:
             if zebrasms_client and active_allocations:
                 res = await zebrasms_client.get_updates()
-                if res.get("meta", {}).get("code") == 0:
-                    rows = res.get("data", {}).get("rows", [])
+                if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
+                    rows = res.get("data", {}).get("rows", []) or []
                     for row in rows:
                         target_num = row.get("number") or ""
                         msg_text = row.get("message", "")
                         sender = row.get("sender", "UNKNOWN")
                         otp_code = extract_code(msg_text)
 
-                        # Check if this phone number matches any currently active user allocation
                         for alloc_key, info in list(active_allocations.items()):
+                            if info.get("provider", "zebrasms") != "zebrasms":
+                                continue
                             alloc_num = info.get("number") or ""
                             if alloc_num == target_num or alloc_num.replace("+", "") == target_num.replace("+", ""):
                                 await dispatch_otp(app, info, target_num, otp_code, sender, msg_text)
-                                # Remove allocation once code is captured/dispatched
                                 active_allocations.pop(alloc_key, None)
         except Exception as e:
             logging.error(f"Error in ZebraSMS global poller: {e}")
 
-        # Cached for 2 seconds per ZebraSMS docs, safe polling interval
         await asyncio.sleep(2.0)
+
+
+async def global_mknetwork_poller(app):
+    """Polls MK Network v3 /check/status in batches for active MK allocations and deduplicates by sms_id."""
+    while True:
+        try:
+            if mknetwork_client and active_allocations:
+                mk_entries = [
+                    (alloc_key, info)
+                    for alloc_key, info in list(active_allocations.items())
+                    if info.get("provider") == "mknetwork" and info.get("request_id") is not None
+                ]
+                if mk_entries:
+                    id_to_alloc = {int(info["request_id"]): (alloc_key, info) for alloc_key, info in mk_entries}
+                    request_ids = list(id_to_alloc.keys())
+
+                    for idx in range(0, len(request_ids), 100):
+                        batch_ids = request_ids[idx:idx + 100]
+                        res = await mknetwork_client.check_status(batch_ids)
+                        if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+                            results = res.get("data", {}).get("results", []) or []
+                            for item in results:
+                                req_id = item.get("request_id")
+                                status = (item.get("status") or "").lower()
+                                target_num = item.get("number") or f"+{item.get('full_number', '')}"
+                                match = id_to_alloc.get(int(req_id)) if req_id is not None else None
+                                if not match:
+                                    continue
+                                alloc_key, info = match
+
+                                if status in ("expired", "not_found"):
+                                    active_allocations.pop(alloc_key, None)
+                                    continue
+
+                                messages = item.get("messages") or []
+                                if messages:
+                                    for m in messages:
+                                        sms_id = str(m.get("sms_id") or "")
+                                        if sms_id:
+                                            if len(seen_mk_sms_ids) > MAX_SEEN_SIZE:
+                                                seen_mk_sms_ids.clear()
+                                            if sms_id in seen_mk_sms_ids:
+                                                continue
+                                            seen_mk_sms_ids.add(sms_id)
+                                        m_text = m.get("full_sms") or m.get("message") or ""
+                                        m_otp = str(m.get("otp_code") or extract_code(m_text))
+                                        m_sender = str(m.get("sender") or info.get("service") or "MKNETWORK")
+                                        await dispatch_otp(app, info, target_num, m_otp, m_sender, m_text)
+                                elif status in ("success", "multiple"):
+                                    full_sms = item.get("full_sms") or ""
+                                    otp_val = str(item.get("otp_code") or extract_code(full_sms))
+                                    sender_val = str(item.get("sender") or info.get("service") or "MKNETWORK")
+                                    dedupe_key = f"{req_id}_{otp_val}_{full_sms}"
+                                    if dedupe_key not in seen_mk_sms_ids:
+                                        if len(seen_mk_sms_ids) > MAX_SEEN_SIZE:
+                                            seen_mk_sms_ids.clear()
+                                        seen_mk_sms_ids.add(dedupe_key)
+                                        await dispatch_otp(app, info, target_num, otp_val, sender_val, full_sms)
+        except Exception as e:
+            logging.error(f"Error in MKNetwork global poller: {e}")
+
+        await asyncio.sleep(3.5)
 
 
 async def fake_sms_generator_loop(app):
@@ -1247,9 +1610,10 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton("🦓 ZebraSMS", callback_data="admin_prov_zebrasms"),
-            InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
+            InlineKeyboardButton("🌐 MK Network", callback_data="admin_prov_mknetwork"),
         ],
         [
+            InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
             InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
         ]
     ]
@@ -1258,7 +1622,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_msg = (
         f"🛠 **Admin Configuration Panel** 🛠\n\n"
         f"🧪 **Fake SMS Simulation:** {fake_status} (Interval: {fake_otp_settings['interval']}s)\n\n"
-        f"👇 *Select ZebraSMS to manage ranges or toggle settings:*"
+        f"👇 *Select a provider to manage ranges or toggle settings:*"
     )
     await update.message.reply_text(admin_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -1274,6 +1638,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if data.startswith("admin_prov_"):
         prov = data.replace("admin_prov_", "")
+        prov_label = "MK Network" if prov == "mknetwork" else "ZebraSMS"
         context.user_data["admin_provider"] = prov
         managed_ranges = await asyncio.to_thread(db_get_managed_ranges, prov)
 
@@ -1282,7 +1647,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         ) or "No active ranges configured."
 
         msg = (
-            f"🛠 **Admin Panel: ZebraSMS** 🛠\n\n"
+            f"🛠 **Admin Panel: {prov_label}** 🛠\n\n"
             f"📋 **Current Active Ranges:**\n{ranges_text}\n\n"
             f"👇 *Manage ranges below:*"
         )
@@ -1305,9 +1670,10 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         keyboard = [
             [
                 InlineKeyboardButton("🦓 ZebraSMS", callback_data="admin_prov_zebrasms"),
-                InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
+                InlineKeyboardButton("🌐 MK Network", callback_data="admin_prov_mknetwork"),
             ],
             [
+                InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
                 InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
             ]
         ]
@@ -1315,17 +1681,18 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         admin_msg = (
             f"🛠 **Admin Configuration Panel** 🛠\n\n"
             f"🧪 **Fake SMS Simulation:** {fake_status} (Interval: {fake_otp_settings['interval']}s)\n\n"
-            f"👇 *Select ZebraSMS to manage ranges or toggle settings:*"
+            f"👇 *Select a provider to manage ranges or toggle settings:*"
         )
         await query.edit_message_text(admin_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     elif data.startswith("admin_add_"):
         prov = data.replace("admin_add_", "")
+        prov_label = "MK Network" if prov == "mknetwork" else "ZebraSMS"
         context.user_data["waiting_for_range"] = prov
         context.user_data["waiting_for_broadcast"] = False
         await query.message.reply_text(
-            f"✍ **Send configuration for ZebraSMS:**\n\n`Service | Country | Range`\n👉 *Example:* `WhatsApp | Ivory Coast | 22501XXX`",
+            f"✍ **Send configuration for {prov_label}:**\n\n`Service | Country | Range`\n👉 *Example:* `WhatsApp | Ivory Coast | 22501XXX`",
             parse_mode="Markdown",
         )
         await query.answer()
@@ -1372,8 +1739,38 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         prov = data.replace("admin_clear_", "")
         await asyncio.to_thread(db_clear_managed_ranges, prov)
         invalidate_liveaccess_cache()
-        await query.answer("All ZebraSMS ranges cleared!", show_alert=True)
-        await query.edit_message_text("🗑 **All configured ZebraSMS ranges cleared.**")
+        await query.answer("Ranges cleared!", show_alert=True)
+        await query.edit_message_text("🗑 **All configured ranges cleared.**")
+
+
+async def _allocate_single_provider_number(provider: str, range_val: str) -> tuple[str, str, str | None, int | None] | None:
+    """Requests one number from ZebraSMS or MK Network v3 and normalizes the result."""
+    if provider == "mknetwork" and mknetwork_client:
+        res = await mknetwork_client.get_number(range_val=range_val)
+        if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+            row = res.get("data")
+            if isinstance(row, list) and row:
+                row = row[0]
+            if isinstance(row, dict):
+                num_val = row.get("number") or (f"+{row['full_number']}" if row.get("full_number") else None)
+                req_id = row.get("request_id")
+                country_val = row.get("country")
+                if num_val:
+                    alloc_key = f"mk_{req_id}" if req_id is not None else num_val
+                    return alloc_key, num_val, country_val, int(req_id) if req_id is not None else None
+        return None
+
+    if zebrasms_client:
+        res = await zebrasms_client.get_number(range_val=range_val)
+        if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
+            rows = res.get("data", {}).get("rows", []) or []
+            if rows:
+                row = rows[0]
+                num_val = row.get("number")
+                country_val = row.get("country")
+                if num_val:
+                    return num_val, num_val, country_val, None
+    return None
 
 
 async def user_provision_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1440,8 +1837,8 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
         all_ranges = await get_live_and_managed_ranges()
         matched_item = next(
-            (r for r in all_ranges if r["range"] == selected_range),
-            {}
+            (r for r in all_ranges if r["range"] == selected_range and r.get("provider", "zebrasms") == chosen_provider),
+            next((r for r in all_ranges if r["range"] == selected_range), {}),
         )
 
         c_name, flag_icon = auto_detect_country_and_flag(matched_item.get("country", ""), selected_range)
@@ -1453,23 +1850,18 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
         )
 
         allocated_results = []
-
-        if zebrasms_client:
-            await asyncio.sleep(0.3)
-            responses = await asyncio.gather(
-                zebrasms_client.get_number(range_val=selected_range),
-                zebrasms_client.get_number(range_val=selected_range),
-            )
-            seen_nums = set()
-            for res in responses:
-                if isinstance(res, dict) and res.get("meta", {}).get("code") == 0:
-                    rows = res.get("data", {}).get("rows", [])
-                    if rows:
-                        row = rows[0]
-                        num_val = row.get("number")
-                        if num_val and num_val not in seen_nums:
-                            seen_nums.add(num_val)
-                            allocated_results.append((num_val, num_val, row.get("country")))
+        await asyncio.sleep(0.3)
+        raw_allocs = await asyncio.gather(
+            _allocate_single_provider_number(chosen_provider, selected_range),
+            _allocate_single_provider_number(chosen_provider, selected_range),
+        )
+        seen_nums = set()
+        for entry in raw_allocs:
+            if entry:
+                alloc_key, num_val, row_country, req_id = entry
+                if num_val and num_val not in seen_nums:
+                    seen_nums.add(num_val)
+                    allocated_results.append((alloc_key, num_val, row_country, req_id))
 
         if allocated_results:
             first_entry = allocated_results[0]
@@ -1479,7 +1871,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             rand_fname, rand_lname = generate_random_english_name()
             number_copy_buttons = []
 
-            for alloc_key, allocated_num, row_country in allocated_results:
+            for alloc_key, allocated_num, row_country, req_id in allocated_results:
                 if alloc_key and allocated_num:
                     num_c_name, num_flag = auto_detect_country_and_flag(
                         row_country if row_country else final_country_name,
@@ -1491,6 +1883,8 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                         "flag": num_flag,
                         "number": allocated_num,
                         "provider": chosen_provider,
+                        "service": matched_item.get("service", "OTP"),
+                        "request_id": req_id,
                         "first_name": rand_fname,
                     }
                     number_copy_buttons.append(
@@ -1565,9 +1959,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_msg, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 
+async def handle_group_chat_tracking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Automatically tracks group/supergroup chat IDs for country broadcasts."""
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        asyncio.create_task(asyncio.to_thread(db_add_group, chat.id))
+
+
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_chat_id = update.effective_chat.id
-    asyncio.create_task(asyncio.to_thread(db_add_user, user_chat_id))
+    chat = update.effective_chat
+    user_chat_id = chat.id
+    if chat and chat.type in ("group", "supergroup"):
+        asyncio.create_task(asyncio.to_thread(db_add_group, chat.id))
+    else:
+        asyncio.create_task(asyncio.to_thread(db_add_user, user_chat_id))
 
     if context.user_data.get("waiting_for_broadcast"):
         context.user_data["waiting_for_broadcast"] = False
@@ -1580,7 +1985,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         for uid in all_users:
             try:
                 if update.message.text:
-                    # Preserve user's exact entities (bold, italic, mono, etc.) + prepend header
                     orig_entities = list(update.message.entities or ())
                     shifted_entities = [
                         e for e in (
@@ -1603,8 +2007,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                         reply_markup=update.message.reply_markup,
                     )
                 else:
-                    # Handles photo, video, document, audio, voice, animation, etc.
-                    # along with caption_entities (bold, italic, mono in captions)
                     await update.message.copy(
                         chat_id=uid,
                         caption=f"{header}{update.message.caption}" if update.message.caption else None,
@@ -1748,6 +2150,7 @@ async def _start_background_workers(application) -> None:
     await get_cached_bot_username(application.bot)
     application.create_task(dispatch_consumer_loop(application))
     application.create_task(global_zebrasms_poller(application))
+    application.create_task(global_mknetwork_poller(application))
     application.create_task(fake_sms_generator_loop(application))
     application.create_task(liveaccess_auto_refresh_loop())
 
@@ -1773,7 +2176,8 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(user_provision_callback_handler, pattern="^(get_srv_|back_to_services|prov_|change_|refresh_2fa_|copy_otp_)"))
 
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.StatusUpdate.ALL, handle_group_chat_tracking))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with high-concurrency ZebraSMS integration...")
+    print("🤖 Bot running with high-concurrency ZebraSMS + MK Network v3 integration...")
     app.run_polling(drop_pending_updates=True)
