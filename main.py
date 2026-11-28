@@ -1340,15 +1340,36 @@ async def maybe_broadcast_db_range_country_alert(
         last_country_broadcast_at[country_key] = now
 
     masked_num = mask_phone_number(target_number)
+    db_range_val = (matched_db_range.get("range") or "").strip()
+    db_provider = (matched_db_range.get("provider") or "zebrasms").strip()
+    sender_label = (sender or "OTP").strip()
+    country_label = (resolved_country or "Unknown").strip()
+    flag_label = (resolved_flag or "🌐").strip()
+    code_label = str(otp_code or "").strip()
+
+    col1_w = 8
+    alert_table_block = "\n".join([
+        f"🌐 {'COUNTRY':<{col1_w}} | {flag_label} {country_label}",
+        f"🔢 {'RANGE':<{col1_w}} | {db_range_val}",
+        f"» {'NUMBER':<{col1_w}} | {masked_num}",
+        f"👤 {'SENDER':<{col1_w}} | {sender_label}",
+        f"❤ {'CODE':<{col1_w}} | {code_label}",
+    ])
+    alert_detail_line = format_otp_detail_line(sender_label, msg_text)
+
     alert_text = (
-        "🌍 *NEW COUNTRY / 30-MIN DB RANGE ALERT* 🌍\n\n"
-        f"{resolved_flag} *Country:* {resolved_country}\n"
-        f"🔢 *DB Range:* `{matched_db_range.get('range', '')}`\n"
-        f"📱 *To Number:* `{masked_num}`\n"
-        f"👤 *Sender:* `{sender}`\n"
-        f"💬 *Full Message:* `{msg_text}`"
+        "🌍 *NEW COUNTRY 30 min* 🌍\n"
+        f"```text\n{alert_table_block}\n```\n"
+        f"✅ `{alert_detail_line}`"
     )
-    alert_keyboard = await build_channel_keyboard(app.bot, otp_code, include_bot_button=True)
+    alert_keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                f"📱 Get Number ({db_range_val})",
+                callback_data=f"prov_{db_provider}_{db_range_val}",
+            )
+        ]
+    ])
 
     target_chats: list[int] = []
     seen_targets: set[int] = set()
