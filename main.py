@@ -1247,17 +1247,16 @@ async def liveaccess_auto_refresh_loop():
 async def build_channel_keyboard(bot, otp_code: str, include_bot_button: bool = True) -> InlineKeyboardMarkup:
     bot_info = await bot.get_me()
     bot_username = (bot_info.username or "").lstrip("@")
-    c1, c2, c3 = random.sample(list(DYNAMIC_COLOR_BADGES), k=3)
 
     first_row = [
-        InlineKeyboardButton(f"{c1} 📋 Copy OTP: {otp_code} {c1}", copy_text=CopyTextButton(text=str(otp_code)))
+        InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))
     ]
     if include_bot_button and bot_username:
-        first_row.append(InlineKeyboardButton(f"🤖 Bot {c2}", url=f"https://t.me/{bot_username}"))
+        first_row.append(InlineKeyboardButton("🤖 Bot", url=f"https://t.me/{bot_username}"))
 
     return InlineKeyboardMarkup([
         first_row,
-        [InlineKeyboardButton(f"👨‍💻 Developer {c3}", url="https://t.me/anstans")],
+        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/anstans")],
     ])
 
 
@@ -1480,18 +1479,17 @@ async def forward_otp_to_groups(
     )
 
     bot_username = await get_cached_bot_username(app.bot)
-    gc1, gc2, gc3 = random.sample(list(DYNAMIC_COLOR_BADGES), k=3)
     buttons_row_1 = []
     if CHANNEL_URL and CHANNEL_URL != "https://t.me/":
-        buttons_row_1.append(InlineKeyboardButton(f"↗ CHANNEL {gc1}", url=CHANNEL_URL))
+        buttons_row_1.append(InlineKeyboardButton("↗ CHANNEL", url=CHANNEL_URL))
     if bot_username:
-        buttons_row_1.append(InlineKeyboardButton(f"↗ NUMBER {gc2}", url=f"https://t.me/{bot_username}"))
+        buttons_row_1.append(InlineKeyboardButton("↗ NUMBER", url=f"https://t.me/{bot_username}"))
 
     keyboard_rows = []
     if buttons_row_1:
         keyboard_rows.append(buttons_row_1)
     keyboard_rows.append([
-        InlineKeyboardButton(f"{gc3} 📋 Copy OTP: {code_label} {gc3}", copy_text=CopyTextButton(text=code_label))
+        InlineKeyboardButton(f"📋 Copy OTP: {code_label}", copy_text=CopyTextButton(text=code_label))
     ])
     group_keyboard = InlineKeyboardMarkup(keyboard_rows)
 
@@ -1764,39 +1762,13 @@ async def fake_sms_generator_loop(app):
             logging.error(f"Error in fake SMS loop: {e}")
 
 
-# --- Dynamic Colorful Styling Helpers (Inline & Main Keyboard) ---
-DYNAMIC_COLOR_BADGES = ("🟢", "🔵", "🟣", "🟠", "🟡", "🔴", "⚪", "🟤")
-
-
-def pick_random_color(exclude: str | None = None) -> str:
-    pool = [c for c in DYNAMIC_COLOR_BADGES if c != exclude] or list(DYNAMIC_COLOR_BADGES)
-    return random.choice(pool)
-
-
-def style_inline_label(label: str, color: str | None = None, prefix_color: bool = False) -> str:
-    clean = (label or "").strip()
-    if not clean:
-        return clean
-    c = color or pick_random_color()
-    if any(b in clean for b in DYNAMIC_COLOR_BADGES):
-        return clean
-    return f"{c} {clean}" if prefix_color else f"{clean} {c}"
-
-
-def build_dynamic_main_keyboard() -> ReplyKeyboardMarkup:
-    # Shuffle colors dynamically across rows/buttons while preserving each button's action keyword
-    palette = random.sample(list(DYNAMIC_COLOR_BADGES), k=6)
+def get_main_keyboard():
     keyboard = [
-        [KeyboardButton(f"📱 Get Number {palette[0]}"), KeyboardButton(f"⚡ Active Engine {palette[1]}")],
-        [KeyboardButton(f"🌐 Live Feed {palette[2]}"), KeyboardButton(f"🎁 Referrals {palette[3]}")],
-        [KeyboardButton(f"🔐 2FA Online {palette[4]}"), KeyboardButton(f"🎧 Support Hub {palette[5]}")],
+        [KeyboardButton("📱 Get Number 🟢"), KeyboardButton("⚡ Active Engine ⚡")],
+        [KeyboardButton("🌐 Live Feed 🔵"), KeyboardButton("🎁 Referrals 🟡")],
+        [KeyboardButton("🔐 2FA Online 🟣"), KeyboardButton("🎧 Support Hub 🔴")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-
-def get_main_keyboard():
-    return build_dynamic_main_keyboard()
-
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1851,15 +1823,14 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             f"📋 **Current Active Ranges:**\n{ranges_text}\n\n"
             f"👇 *Manage ranges below:*"
         )
-        ac1, ac2, ac3, ac4 = random.sample(list(DYNAMIC_COLOR_BADGES), k=4)
         keyboard = [
             [
-                InlineKeyboardButton(f"➕ Add Range {ac1}", callback_data=f"admin_add_{prov}"),
-                InlineKeyboardButton(f"🗑 Delete Range {ac2}", callback_data=f"admin_del_select_{prov}"),
+                InlineKeyboardButton("➕ Add Range 🟢", callback_data=f"admin_add_{prov}"),
+                InlineKeyboardButton("🗑 Delete Range 🔴", callback_data=f"admin_del_select_{prov}"),
             ],
             [
-                InlineKeyboardButton(f"⚠️ Clear All {ac3}", callback_data=f"admin_clear_{prov}"),
-                InlineKeyboardButton(f"🔙 Back {ac4}", callback_data="admin_back_main")
+                InlineKeyboardButton("⚠️ Clear All 🟠", callback_data=f"admin_clear_{prov}"),
+                InlineKeyboardButton("🔙 Back", callback_data="admin_back_main")
             ]
         ]
         await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1907,10 +1878,10 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         keyboard = [
-            [InlineKeyboardButton(f"❌ Delete {r['flag']} {r['service']} ({r['range']}) {pick_random_color()}", callback_data=f"admin_del_{r['service']}_{r['range']}")]
+            [InlineKeyboardButton(f"❌ Delete {r['flag']} {r['service']} ({r['range']}) 🔴", callback_data=f"admin_del_{r['service']}_{r['range']}")]
             for r in managed_ranges
         ]
-        keyboard.append([InlineKeyboardButton(f"🔙 Back {pick_random_color()}", callback_data=f"admin_prov_{prov}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"admin_prov_{prov}")])
         await query.edit_message_text(f"🗑 **Select range to delete:**", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("admin_del_"):
@@ -1992,13 +1963,13 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
 
         country_buttons = [
             InlineKeyboardButton(
-                f"{r['flag']} {r['country']} ({r['range']}) {pick_random_color()}",
+                f"{r['flag']} {r['country']} ({r['range']})",
                 callback_data=f"prov_{r.get('provider', 'zebrasms')}_{r['range']}"
             )
             for r in matching_ranges
         ]
         keyboard = [country_buttons[i:i + 2] for i in range(0, len(country_buttons), 2)]
-        keyboard.append([InlineKeyboardButton(f"🔙 Back to Services {pick_random_color()}", callback_data="back_to_services")])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")])
 
         await query.edit_message_text(
             f"🛠 *Selected Service:* `{selected_service}`\n\n👇 *Select Country / Active Range to allocate number:*",
@@ -2017,7 +1988,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             await query.edit_message_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
             return
 
-        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} {pick_random_color()}", callback_data=f"get_srv_{srv}")] for srv in services]
+        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
         await query.edit_message_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
@@ -2088,9 +2059,8 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                         "request_id": req_id,
                         "first_name": rand_fname,
                     }
-                    nc = pick_random_color()
                     number_copy_buttons.append(
-                        [InlineKeyboardButton(f"{nc} 📱 {allocated_num} {nc}", copy_text=CopyTextButton(text=str(allocated_num)))]
+                        [InlineKeyboardButton(f"📱 {allocated_num}", copy_text=CopyTextButton(text=str(allocated_num)))]
                     )
 
             msg = (
@@ -2101,10 +2071,9 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 f"⏱ **Expires In:** ~15 mins"
             )
 
-            fc1, fc2 = random.sample(list(DYNAMIC_COLOR_BADGES), k=2)
             keyboard_layout = number_copy_buttons + [
-                [InlineKeyboardButton(f"🔄 Change Number {fc1}", callback_data=f"change_{chosen_provider}_{selected_range}")],
-                [InlineKeyboardButton(f"📢 Open OTP Channel {fc2}", url=CHANNEL_URL)],
+                [InlineKeyboardButton("🔄 Change Number 🟠", callback_data=f"change_{chosen_provider}_{selected_range}")],
+                [InlineKeyboardButton("📢 Open OTP Channel 🔵", url=CHANNEL_URL)],
             ]
             keyboard = InlineKeyboardMarkup(keyboard_layout)
 
@@ -2119,10 +2088,9 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
                 )
             )
         else:
-            fb1, fb2 = random.sample(list(DYNAMIC_COLOR_BADGES), k=2)
             fallback_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🔄 Try Again {fb1}", callback_data=data)],
-                [InlineKeyboardButton(f"🔙 Back to Services {fb2}", callback_data="back_to_services")]
+                [InlineKeyboardButton("🔄 Try Again", callback_data=data)],
+                [InlineKeyboardButton("🔙 Back to Services", callback_data="back_to_services")]
             ])
             await loading_msg.edit_text(
                 f"❌ **Out of stock or API error hit.** Tap below to try again or choose another service.",
@@ -2137,7 +2105,7 @@ async def user_provision_callback_handler(update: Update, context: ContextTypes.
             totp = pyotp.TOTP(secret)
             code = totp.now()
             remaining = 30 - (int(asyncio.get_event_loop().time()) % 30)
-            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f"🔄 Refresh Code {pick_random_color()}", callback_data=f"refresh_2fa_{secret}")]])
+            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret}")]])
             await query.edit_message_text(f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s", parse_mode="Markdown", reply_markup=refresh_keyboard)
         except Exception:
             await query.edit_message_text("❌ Invalid 2FA secret key!")
@@ -2257,7 +2225,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             totp = pyotp.TOTP(secret_key)
             code = totp.now()
             remaining = 30 - (int(asyncio.get_event_loop().time()) % 30)
-            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f"🔄 Refresh Code {pick_random_color()}", callback_data=f"refresh_2fa_{secret_key}")]])
+            refresh_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Code", callback_data=f"refresh_2fa_{secret_key}")]])
             await update.message.reply_text(f"🔐 *Generated 2FA Code*\n\n🔑 Code: `{code}`\n⏳ Valid for ~{remaining}s", parse_mode="Markdown", reply_markup=refresh_keyboard)
         except Exception:
             await update.message.reply_text("❌ Invalid 2FA secret key!", reply_markup=get_main_keyboard())
@@ -2305,7 +2273,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("⚠ No active social media ranges available right now.", parse_mode="Markdown")
             return
 
-        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} {pick_random_color()}", callback_data=f"get_srv_{srv}")] for srv in services]
+        keyboard = [[InlineKeyboardButton(f"🛡️ {srv} 🟢", callback_data=f"get_srv_{srv}")] for srv in services]
         await update.message.reply_text("📱 *Select a Service:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif "Active Engine" in text:
