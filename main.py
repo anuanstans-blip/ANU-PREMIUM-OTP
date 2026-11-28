@@ -46,6 +46,9 @@ ZEBRASMS_BASE_URL = os.getenv("ZEBRASMS_BASE_URL", "https://api.zebrasms.com/api
 MKNETWORK_API_KEY = os.getenv("MKNETWORK_API_KEY", "").strip(" '\"")
 MKNETWORK_BASE_URL = os.getenv("MKNETWORK_BASE_URL", "https://mknetworkbd.com/api/v3/public").strip(" '\"")
 
+VOLTXSMS_API_KEY = os.getenv("VOLTXSMS_API_KEY", "").strip(" '\"")
+VOLTXSMS_BASE_URL = os.getenv("VOLTXSMS_BASE_URL", "https://api.2oo9.cloud/MXS47FLFX0U/tnevs/@public/api").strip(" '\"")
+
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans").strip(" '\"")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip(" '\"")
@@ -71,6 +74,7 @@ logging.basicConfig(
 active_allocations = {}
 seen_messages = set()
 seen_mk_sms_ids = set()
+seen_voltx_otp_ids = set()
 MAX_SEEN_SIZE = 5000
 
 # 30-minute per-country broadcast state for DB-saved ranges
@@ -97,6 +101,7 @@ _liveaccess_cache = {
     "ranges": [],
     "zebra_live_rows": [],
     "mk_access_items": [],
+    "voltx_live_services": [],
     "updated_at": 0.0,
 }
 _liveaccess_lock = asyncio.Lock()
@@ -1038,13 +1043,76 @@ class MKNetworkClient:
             return {"meta": {"code": -500, "status": "error", "error": str(e)}}
 
 
+# --- VoltxSMS Public API Client ---
+
+class VoltxSMSClient:
+    def __init__(self, api_key: str):
+        self.base_url = VOLTXSMS_BASE_URL.rstrip("/")
+        self.headers = {
+            "mauthapi": api_key,
+            "Content-Type": "application/json",
+        }
+        self.client = httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=6.0,
+            limits=httpx.Limits(max_keepalive_connections=50, max_connections=200),
+        )
+
+    async def get_live_access(self) -> dict:
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/liveaccess",
+                headers=self.headers,
+            )
+            if response.status_code != 200:
+                logging.warning(f"[voltxsms liveaccess] HTTP {response.status_code}: {response.text[:200]}")
+                return {"meta": {"code": response.status_code, "status": "error"}}
+            return response.json()
+        except Exception as e:
+            logging.error(f"[voltxsms liveaccess] Request error: {e}")
+            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
+
+    async def get_number(self, range_val: str) -> dict:
+        try:
+            # Docs: rid = the range number WITHOUT the trailing XXX (e.g. 26134), or a search-mode range_id
+            rid_clean = re.sub(r"[xX]+$", "", str(range_val or "").strip()) or str(range_val or "").strip()
+            payload = {"rid": rid_clean}
+            response = await self.client.post(
+                f"{self.base_url}/getnum",
+                headers=self.headers,
+                json=payload,
+            )
+            print(f"VoltxSMS getnum Response [{response.status_code}]: {response.text}")
+            if response.status_code != 200:
+                return {"meta": {"code": response.status_code, "status": "error"}}
+            return response.json()
+        except Exception as e:
+            print(f"VoltxSMS getnum Exception: {e}")
+            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
+
+    async def get_success_otps(self) -> dict:
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/success-otp",
+                headers=self.headers,
+            )
+            if response.status_code != 200:
+                logging.warning(f"[voltxsms success-otp] HTTP {response.status_code}: {response.text[:200]}")
+                return {"meta": {"code": response.status_code, "status": "error"}}
+            return response.json()
+        except Exception as e:
+            logging.error(f"[voltxsms success-otp] Request error: {e}")
+            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
+
+
 zebrasms_client = ZebraSMSClient(ZEBRASMS_API_KEY) if ZEBRASMS_API_KEY else None
 mknetwork_client = MKNetworkClient(MKNETWORK_API_KEY) if MKNETWORK_API_KEY else None
+voltxsms_client = VoltxSMSClient(VOLTXSMS_API_KEY) if VOLTXSMS_API_KEY else None
 
 
 async def _build_live_and_managed_ranges() -> list:
     """
-    Combines saved DB/fallback ranges with live ranges from ZebraSMS and MK Network v3:
+    Combines saved DB/fallback ranges with live ranges from ZebraSMS, MK Network v3, and VoltxSMS:
     - Keeps both DB managed ranges and live auto-ranges without DB ranges starving live slots.
     - Retains last known live rows if a single API poll fails or returns empty.
     - Keeps exact sender casing (does not combine 'FACEBOOK' and 'Facebook').
@@ -1190,9 +1258,42 @@ async def _build_live_and_managed_ranges() -> list:
                 ):
                     live_added += 1
 
+    # 4. Fetch live ranges from VoltxSMS (/liveaccess -> data.services: [{sid, ranges}])
+    voltx_services = list(_liveaccess_cache.get("voltx_live_services") or [])
+    if voltxsms_client:
+        voltx_res = await voltxsms_client.get_live_access()
+        if isinstance(voltx_res, dict) and voltx_res.get("meta", {}).get("code") == 200:
+            raw_vdata = voltx_res.get("data") or {}
+            fetched_voltx = raw_vdata.get("services", []) if isinstance(raw_vdata, dict) else []
+            if fetched_voltx:
+                voltx_services = fetched_voltx
+                _liveaccess_cache["voltx_live_services"] = fetched_voltx
+            elif voltx_services:
+                logging.warning("[voltxsms liveaccess] Empty services returned; preserving previous Voltx live ranges.")
+        elif voltx_services:
+            logging.warning("[voltxsms liveaccess] API error/rate-limit; preserving previous Voltx live ranges.")
+
+    for item in voltx_services:
+        if not isinstance(item, dict):
+            continue
+        srv = (item.get("sid") or item.get("sender") or item.get("service") or "").strip()
+        if not srv or not is_allowed_social_sender(srv):
+            continue
+        for rng in (item.get("ranges") or []):
+            if add_range_entry(
+                srv=srv,
+                rng=str(rng),
+                country="",
+                flag="",
+                provider="voltxsms",
+                from_db=False,
+                enforce_cap=True,
+            ):
+                live_added += 1
+
     logging.info(
         f"[ranges] zebra_rows={len(zebra_live_rows)}, mk_items={len(mk_items)}, "
-        f"db_rows={len(managed_rows)}, live_added={live_added}"
+        f"voltx_services={len(voltx_services)}, db_rows={len(managed_rows)}, live_added={live_added}"
     )
 
     combined = []
@@ -1454,6 +1555,7 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     )
 
+
 async def forward_otp_to_groups(
     app,
     target_number: str,
@@ -1617,7 +1719,7 @@ async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, ms
     await otp_dispatch_queue.put((allocation_info, target_number, otp_code, sender, msg_text))
 
 
-# --- Global Checker Loops polling ZebraSMS and MK Network v3 ---
+# --- Global Checker Loops polling ZebraSMS, MK Network v3, and VoltxSMS ---
 async def global_zebrasms_poller(app):
     """Polls ZebraSMS /publicapi/getupdate endpoint and dispatches messages to matching active allocations."""
     while True:
@@ -1707,6 +1809,50 @@ async def global_mknetwork_poller(app):
         await asyncio.sleep(3.5)
 
 
+async def global_voltxsms_poller(app):
+    """Polls VoltxSMS /success-otp endpoint and dispatches messages to matching active VoltxSMS allocations."""
+    while True:
+        try:
+            if voltxsms_client and active_allocations:
+                has_voltx = any(info.get("provider") == "voltxsms" for info in active_allocations.values())
+                if has_voltx:
+                    res = await voltxsms_client.get_success_otps()
+                    if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+                        otps = (res.get("data") or {}).get("otps", []) or []
+                        for row in otps:
+                            otp_id = str(row.get("otp_id") or "")
+                            raw_num = str(row.get("number") or "").strip()
+                            msg_text = str(row.get("message") or "")
+                            otp_code = extract_code(msg_text)
+
+                            if otp_id:
+                                if len(seen_voltx_otp_ids) > MAX_SEEN_SIZE:
+                                    seen_voltx_otp_ids.clear()
+                                if otp_id in seen_voltx_otp_ids:
+                                    continue
+
+                            clean_target = raw_num.lstrip("+")
+                            for alloc_key, info in list(active_allocations.items()):
+                                if info.get("provider") != "voltxsms":
+                                    continue
+                                alloc_num = (info.get("number") or "").strip()
+                                clean_alloc = alloc_num.lstrip("+")
+                                if clean_alloc and clean_target and (
+                                    clean_alloc == clean_target or clean_alloc.endswith(clean_target) or clean_target.endswith(clean_alloc)
+                                ):
+                                    if otp_id:
+                                        seen_voltx_otp_ids.add(otp_id)
+                                    sender = str(row.get("sid") or row.get("sender") or info.get("service") or "VOLTXSMS")
+                                    display_num = alloc_num if alloc_num.startswith("+") else f"+{clean_target}"
+                                    await dispatch_otp(app, info, display_num, otp_code, sender, msg_text)
+                                    active_allocations.pop(alloc_key, None)
+                                    break
+        except Exception as e:
+            logging.error(f"Error in VoltxSMS global poller: {e}")
+
+        await asyncio.sleep(2.5)
+
+
 async def fake_sms_generator_loop(app):
     while True:
         try:
@@ -1792,6 +1938,14 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+def _provider_display_name(prov: str) -> str:
+    if prov == "mknetwork":
+        return "MK Network"
+    if prov == "voltxsms":
+        return "VoltxSMS"
+    return "ZebraSMS"
+
+
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["waiting_for_range"] = None
     context.user_data["waiting_for_broadcast"] = False
@@ -1804,6 +1958,9 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton("🦓 ZebraSMS", callback_data="admin_prov_zebrasms"),
             InlineKeyboardButton("🌐 MK Network", callback_data="admin_prov_mknetwork"),
+        ],
+        [
+            InlineKeyboardButton("⚡ VoltxSMS", callback_data="admin_prov_voltxsms"),
         ],
         [
             InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
@@ -1831,7 +1988,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if data.startswith("admin_prov_"):
         prov = data.replace("admin_prov_", "")
-        prov_label = "MK Network" if prov == "mknetwork" else "ZebraSMS"
+        prov_label = _provider_display_name(prov)
         context.user_data["admin_provider"] = prov
         managed_ranges = await asyncio.to_thread(db_get_managed_ranges, prov)
 
@@ -1866,6 +2023,9 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 InlineKeyboardButton("🌐 MK Network", callback_data="admin_prov_mknetwork"),
             ],
             [
+                InlineKeyboardButton("⚡ VoltxSMS", callback_data="admin_prov_voltxsms"),
+            ],
+            [
                 InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
                 InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
             ]
@@ -1881,7 +2041,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data.startswith("admin_add_"):
         prov = data.replace("admin_add_", "")
-        prov_label = "MK Network" if prov == "mknetwork" else "ZebraSMS"
+        prov_label = _provider_display_name(prov)
         context.user_data["waiting_for_range"] = prov
         context.user_data["waiting_for_broadcast"] = False
         await query.message.reply_text(
@@ -1937,7 +2097,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _allocate_single_provider_number(provider: str, range_val: str) -> tuple[str, str, str | None, int | None] | None:
-    """Requests one number from ZebraSMS or MK Network v3 and normalizes the result."""
+    """Requests one number from ZebraSMS, MK Network v3, or VoltxSMS and normalizes the result."""
     if provider == "mknetwork" and mknetwork_client:
         res = await mknetwork_client.get_number(range_val=range_val)
         if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
@@ -1951,6 +2111,18 @@ async def _allocate_single_provider_number(provider: str, range_val: str) -> tup
                 if num_val:
                     alloc_key = f"mk_{req_id}" if req_id is not None else num_val
                     return alloc_key, num_val, country_val, int(req_id) if req_id is not None else None
+        return None
+
+    if provider == "voltxsms" and voltxsms_client:
+        res = await voltxsms_client.get_number(range_val=range_val)
+        if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
+            row = res.get("data")
+            if isinstance(row, dict):
+                num_val = row.get("full_number") or (f"+{row['no_plus_number']}" if row.get("no_plus_number") else None)
+                country_val = row.get("country")
+                if num_val:
+                    alloc_key = f"voltx_{num_val}"
+                    return alloc_key, num_val, country_val, None
         return None
 
     if zebrasms_client:
@@ -2344,6 +2516,7 @@ async def _start_background_workers(application) -> None:
     application.create_task(dispatch_consumer_loop(application))
     application.create_task(global_zebrasms_poller(application))
     application.create_task(global_mknetwork_poller(application))
+    application.create_task(global_voltxsms_poller(application))
     application.create_task(fake_sms_generator_loop(application))
     application.create_task(liveaccess_auto_refresh_loop())
 
@@ -2372,5 +2545,5 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.StatusUpdate.ALL, handle_group_chat_tracking))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with high-concurrency ZebraSMS + MK Network v3 integration...")
+    print("🤖 Bot running with high-concurrency ZebraSMS + MK Network v3 + VoltxSMS integration...")
     app.run_polling(drop_pending_updates=True)
