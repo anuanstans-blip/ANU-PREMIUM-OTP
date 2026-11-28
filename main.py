@@ -880,6 +880,31 @@ def mask_phone_number(phone: str) -> str:
     return phone
 
 
+def format_otp_detail_line(sender: str, msg_text: str) -> str:
+    """
+    Replaces raw full-message text with a clean status/client label:
+    - Facebook messages with hash 'Laz+nxCarLW' -> 'FB OFFICIAL APK'
+    - Facebook messages with hash 'H29Q+Fsn4Sr' -> 'FB lite apk'
+    - Other Facebook code messages -> 'FB Web Version'
+    - Non-Facebook messages -> clean single-line summary without raw message dump
+    """
+    raw = (msg_text or "").strip()
+    lower_msg = raw.lower()
+    lower_sender = (sender or "").strip().lower()
+
+    is_facebook = ("facebook" in lower_msg) or ("fb" in lower_sender) or ("facebook" in lower_sender)
+    if is_facebook:
+        if "laz+nxcarlw" in lower_msg:
+            return "FB OFFICIAL APK"
+        if "h29q+fsn4sr" in lower_msg:
+            return "FB lite apk"
+        if "code" in lower_msg or "<#>" in lower_msg or is_facebook:
+            return "FB Web Version"
+
+    cleaned = " ".join(raw.split())
+    return cleaned if cleaned else "OTP Received"
+
+
 def extract_code(message_text: str) -> str:
     match = re.search(r"\b\d{4,8}\b", message_text or "")
     return match.group(0) if match else "No code found"
@@ -1430,10 +1455,12 @@ async def forward_otp_to_groups(
     ]
     table_block = "\n".join(table_lines)
 
+    detail_line = format_otp_detail_line(sender_label, sms_body)
+
     group_text = (
         f"⚡ *{sender_label} • OTP • RCV* ⚡\n"
         f"```text\n{table_block}\n```\n"
-        f"✅ `📋 {sms_body}`"
+        f"✅ `{detail_line}`"
     )
 
     bot_username = await get_cached_bot_username(app.bot)
@@ -1510,10 +1537,11 @@ async def dispatch_consumer_loop(app):
                     f"🌐 {'COUNTRY':<{col1_w}} | {flag_label} {country_label}",
                     f"❤ {'CODE':<{col1_w}} | {code_label}",
                 ])
+                channel_detail_line = format_otp_detail_line(sender_label, sms_body)
                 channel_text = (
                     f"📢 *{sender_label} • OTP • RCV*\n"
                     f"```text\n{channel_table_block}\n```\n"
-                    f"✅ `📋 {sms_body}`"
+                    f"✅ `{channel_detail_line}`"
                 )
                 channel_keyboard = await build_channel_keyboard(app.bot, otp_code, include_bot_button=True)
                 try:
