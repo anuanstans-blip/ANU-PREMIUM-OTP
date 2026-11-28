@@ -1386,9 +1386,9 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = extract_code(dummy_message)
     masked_num = mask_phone_number(dummy_number)
 
-    dm_text = f"📱 `{dummy_number}`  `{code}`"
+    dm_text = f"📱 `{dummy_number}`"
     copy_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📋 Copy OTP: {code}", copy_text=CopyTextButton(text=str(code)))]
+        [InlineKeyboardButton(f"{code}", copy_text=CopyTextButton(text=str(code)))]
     ])
     await update.message.reply_text(dm_text, parse_mode="Markdown", reply_markup=copy_keyboard)
 
@@ -1524,10 +1524,10 @@ async def dispatch_consumer_loop(app):
             flag_icon = allocation_info["flag"]
             user_fname = allocation_info.get("first_name", "User")
 
-            dm_text = f"📱 `{target_number}`  `{otp_code}`"
+            dm_text = f"📱 `{target_number}`"
 
             dm_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))]
+                [InlineKeyboardButton(f"{otp_code}", copy_text=CopyTextButton(text=str(otp_code)))]
             ])
 
             try:
@@ -1732,9 +1732,9 @@ async def fake_sms_generator_loop(app):
                     for alloc_item in active_allocations.values():
                         if alloc_item.get("chat_id") and alloc_item["chat_id"] not in fake_dm_targets:
                             fake_dm_targets.append(alloc_item["chat_id"])
-                    fake_dm_text = f"📱 `{simulated_num}`  `{code_label}`"
+                    fake_dm_text = f"📱 `{simulated_num}`"
                     fake_dm_keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton(f"📋 Copy OTP: {code_label}", copy_text=CopyTextButton(text=str(code_label)))]
+                        [InlineKeyboardButton(f"{code_label}", copy_text=CopyTextButton(text=str(code_label)))]
                     ])
                     for dm_uid in fake_dm_targets:
                         try:
