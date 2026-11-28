@@ -1379,18 +1379,16 @@ async def maybe_broadcast_db_range_country_alert(
 
 async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dummy_number = "+225011234567"
-    dummy_sender = "WHATSAPP"
-    dummy_message = "<#> 123456 is your verification code"
+    dummy_sender = "FB NEW"
+    dummy_message = "<#> 07520 is your Facebook code\nLaz+nxCarLW"
     country_name, flag_icon = auto_detect_country_and_flag("Ivory Coast", dummy_number)
 
     code = extract_code(dummy_message)
     masked_num = mask_phone_number(dummy_number)
 
     dm_text = (
-        "📩 *[TEST] ⒶⓃⓊ ⓄⓉⓅ Ⓡⓔⓒⓔⓘⓥⓔⓓ!*\n\n"
+        f"📩 *[TEST] Hey {update.effective_user.first_name or 'User'}, your OTP has arrived!*\n\n"
         f"📱 *To Number:* `{dummy_number}`\n"
-        f"👤 *Sender:* `{dummy_sender}`\n"
-        f"🔑 *Code:* `{code}`"
     )
     copy_keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"📋 Copy OTP: {code}", copy_text=CopyTextButton(text=str(code)))]
@@ -1398,12 +1396,21 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(dm_text, parse_mode="Markdown", reply_markup=copy_keyboard)
 
     if CHANNEL_CHAT_ID:
+        sender_label = (dummy_sender or "OTP").strip()
+        country_label = (country_name or "Unknown").strip()
+        flag_label = (flag_icon or "🌐").strip()
+        code_label = str(code or "").strip()
+        col1_w = 8
+        channel_table_block = "\n".join([
+            f"» {'NUMBER':<{col1_w}} | {masked_num}",
+            f"🌐 {'COUNTRY':<{col1_w}} | {flag_label} {country_label}",
+            f"❤ {'CODE':<{col1_w}} | {code_label}",
+        ])
+        channel_detail_line = format_otp_detail_line(sender_label, dummy_message)
         channel_text = (
-            "📢 *ⒶⓃⓊ ⓄⓉⓅ Ⓡⓔⓒⓔⓘⓥⓔⓓ*\n\n"
-            f"📱 *To Number:* `{masked_num}`\n"
-            f"{flag_icon} *Country:* {country_name}\n"
-            f"👤 *Sender:* `{dummy_sender}`\n"
-            f"💬 *Full Message:* `{dummy_message}`"
+            f"📢 *{sender_label} • OTP • RCV*\n"
+            f"```text\n{channel_table_block}\n```\n"
+            f"✅ `{channel_detail_line}`"
         )
         channel_keyboard = await build_channel_keyboard(context.bot, code, include_bot_button=True)
         try:
@@ -1417,6 +1424,17 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as err:
             await update.message.reply_text(f"❌ Failed to send to Channel: `{err}`", parse_mode="Markdown")
 
+    asyncio.create_task(
+        forward_otp_to_groups(
+            app=context.application,
+            target_number=dummy_number,
+            country_name=country_name,
+            flag_icon=flag_icon,
+            sender=dummy_sender,
+            otp_code=code,
+            msg_text=dummy_message,
+        )
+    )
 
 async def forward_otp_to_groups(
     app,
@@ -1692,18 +1710,39 @@ async def fake_sms_generator_loop(app):
                     msg_text = f"<#> {otp} is your {app_name} verification code."
                     masked_num = mask_phone_number(simulated_num)
 
+                    sender_label = (app_name or "OTP").strip()
+                    country_label = (country_name or "Unknown").strip()
+                    flag_label = (flag_icon or "🌐").strip()
+                    code_label = str(otp or "").strip()
+                    col1_w = 8
+                    fake_table_block = "\n".join([
+                        f"» {'NUMBER':<{col1_w}} | {masked_num}",
+                        f"🌐 {'COUNTRY':<{col1_w}} | {flag_label} {country_label}",
+                        f"❤ {'CODE':<{col1_w}} | {code_label}",
+                    ])
+                    fake_detail_line = format_otp_detail_line(sender_label, msg_text)
                     channel_text = (
-                        "📢 *ANU OTP Received*\n\n"
-                        f"📱 *To Number:* `{masked_num}`\n"
-                        f"{flag_icon} *Country:* {country_name}\n"
-                        f"👤 *Sender:* `{app_name}`\n"
-                        f"💬 *Full Message:* `{msg_text}`"
+                        f"📢 *{sender_label} • OTP • RCV*\n"
+                        f"```text\n{fake_table_block}\n```\n"
+                        f"✅ `{fake_detail_line}`"
                     )
                     channel_keyboard = await build_channel_keyboard(app.bot, otp, include_bot_button=True)
                     try:
                         await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                     except Exception as err:
                         logging.error(f"Failed to post simulated SMS: {err}")
+
+                    asyncio.create_task(
+                        forward_otp_to_groups(
+                            app=app,
+                            target_number=simulated_num,
+                            country_name=country_name,
+                            flag_icon=flag_icon,
+                            sender=sender_label,
+                            otp_code=code_label,
+                            msg_text=msg_text,
+                        )
+                    )
         except Exception as e:
             logging.error(f"Error in fake SMS loop: {e}")
 
