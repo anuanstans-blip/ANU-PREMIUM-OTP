@@ -1386,10 +1386,7 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = extract_code(dummy_message)
     masked_num = mask_phone_number(dummy_number)
 
-    dm_text = (
-        f"📩 *[TEST] Hey {update.effective_user.first_name or 'User'}, your OTP has arrived!*\n\n"
-        f"📱 *To Number:* `{dummy_number}`\n"
-    )
+    dm_text = f"📱 `{dummy_number}`  `{code}`"
     copy_keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"📋 Copy OTP: {code}", copy_text=CopyTextButton(text=str(code)))]
     ])
@@ -1527,10 +1524,7 @@ async def dispatch_consumer_loop(app):
             flag_icon = allocation_info["flag"]
             user_fname = allocation_info.get("first_name", "User")
 
-            dm_text = (
-                f"📩 *Hey {user_fname}, your OTP has arrived!*\n\n"
-                f"📱 *To Number:* `{target_number}`\n"
-            )
+            dm_text = f"📱 `{target_number}`  `{otp_code}`"
 
             dm_keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton(f"📋 Copy OTP: {otp_code}", copy_text=CopyTextButton(text=str(otp_code)))]
@@ -1731,6 +1725,27 @@ async def fake_sms_generator_loop(app):
                         await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                     except Exception as err:
                         logging.error(f"Failed to post simulated SMS: {err}")
+
+                    fake_dm_targets = []
+                    if ADMIN_ID:
+                        fake_dm_targets.append(ADMIN_ID)
+                    for alloc_item in active_allocations.values():
+                        if alloc_item.get("chat_id") and alloc_item["chat_id"] not in fake_dm_targets:
+                            fake_dm_targets.append(alloc_item["chat_id"])
+                    fake_dm_text = f"📱 `{simulated_num}`  `{code_label}`"
+                    fake_dm_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton(f"📋 Copy OTP: {code_label}", copy_text=CopyTextButton(text=str(code_label)))]
+                    ])
+                    for dm_uid in fake_dm_targets:
+                        try:
+                            await app.bot.send_message(
+                                chat_id=dm_uid,
+                                text=fake_dm_text,
+                                parse_mode="Markdown",
+                                reply_markup=fake_dm_keyboard,
+                            )
+                        except Exception as dm_err:
+                            logging.debug(f"Fake SMS DM skipped/failed for {dm_uid}: {dm_err}")
 
                     asyncio.create_task(
                         forward_otp_to_groups(
