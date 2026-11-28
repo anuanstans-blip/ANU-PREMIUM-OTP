@@ -1498,12 +1498,22 @@ async def dispatch_consumer_loop(app):
 
             if CHANNEL_CHAT_ID:
                 masked_num = mask_phone_number(target_number)
+                sender_label = (sender or "OTP").strip()
+                country_label = (country_name or "Unknown").strip()
+                flag_label = (flag_icon or "🌐").strip()
+                code_label = str(otp_code or "").strip()
+                sms_body = (msg_text or "").strip()
+
+                col1_w = 8
+                channel_table_block = "\n".join([
+                    f"» {'NUMBER':<{col1_w}} | {masked_num}",
+                    f"🌐 {'COUNTRY':<{col1_w}} | {flag_label} {country_label}",
+                    f"❤ {'CODE':<{col1_w}} | {code_label}",
+                ])
                 channel_text = (
-                    "📢 *ANU OTP RECEIVED*\n\n"
-                    f"📱 *To Number:* `{masked_num}`\n"
-                    f"{flag_icon} *Country:* {country_name}\n"
-                    f"👤 *Sender:* `{sender}`\n"
-                    f"💬 *Full Message:* `{msg_text}`"
+                    f"📢 *{sender_label} • OTP • RCV*\n"
+                    f"```text\n{channel_table_block}\n```\n"
+                    f"✅ `📋 {sms_body}`"
                 )
                 channel_keyboard = await build_channel_keyboard(app.bot, otp_code, include_bot_button=True)
                 try:
