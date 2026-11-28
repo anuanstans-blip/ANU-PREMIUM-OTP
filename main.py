@@ -46,12 +46,6 @@ ZEBRASMS_BASE_URL = os.getenv("ZEBRASMS_BASE_URL", "https://api.zebrasms.com/api
 MKNETWORK_API_KEY = os.getenv("MKNETWORK_API_KEY", "").strip(" '\"")
 MKNETWORK_BASE_URL = os.getenv("MKNETWORK_BASE_URL", "https://mknetworkbd.com/api/v3/public").strip(" '\"")
 
-VOLTXSMS_API_KEY = os.getenv("VOLTXSMS_API_KEY", "").strip(" '\"")
-VOLTXSMS_BASE_URL = os.getenv(
-    "VOLTXSMS_BASE_URL",
-    "https://api.2oo9.cloud/MXS47FLFXBU/tnevs/@public/api",
-).strip(" '\"")
-
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@anstans").strip(" '\"")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip(" '\"")
@@ -77,7 +71,6 @@ logging.basicConfig(
 active_allocations = {}
 seen_messages = set()
 seen_mk_sms_ids = set()
-seen_voltx_otp_ids = set()
 MAX_SEEN_SIZE = 5000
 
 # 30-minute per-country broadcast state for DB-saved ranges
@@ -104,7 +97,6 @@ _liveaccess_cache = {
     "ranges": [],
     "zebra_live_rows": [],
     "mk_access_items": [],
-    "voltx_live_services": [],
     "updated_at": 0.0,
 }
 _liveaccess_lock = asyncio.Lock()
@@ -1046,97 +1038,13 @@ class MKNetworkClient:
             return {"meta": {"code": -500, "status": "error", "error": str(e)}}
 
 
-# --- VoltxSMS (3rd Provider) Client ---
-
-class VoltxSMSClient:
-    def __init__(self, api_key: str, base_url: str = VOLTXSMS_BASE_URL):
-        self.base_url = (base_url or VOLTXSMS_BASE_URL).rstrip("/")
-        self.headers = {
-            "mauthapi": api_key,
-            "Content-Type": "application/json",
-        }
-        self.client = httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=6.0,
-            limits=httpx.Limits(max_keepalive_connections=50, max_connections=200),
-        )
-
-    @staticmethod
-    def _normalize_rid(range_val: str) -> str:
-        raw = (range_val or "").strip()
-        if not raw:
-            return ""
-        cleaned = re.sub(r"[xX]+$", "", raw).strip()
-        return cleaned if cleaned else raw
-
-    async def get_live_access(self) -> dict:
-        try:
-            response = await self.client.get(
-                f"{self.base_url}/liveaccess",
-                headers=self.headers,
-            )
-            if response.status_code != 200:
-                logging.warning(f"[voltxsms liveaccess] HTTP {response.status_code}: {response.text[:200]}")
-                return {"meta": {"code": response.status_code, "status": "error"}}
-            return response.json()
-        except Exception as e:
-            logging.error(f"[voltxsms liveaccess] Request error: {e}")
-            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
-
-    async def get_number(self, range_val: str) -> dict:
-        try:
-            rid = self._normalize_rid(range_val)
-            payload = {"rid": rid}
-            response = await self.client.post(
-                f"{self.base_url}/getnum",
-                headers=self.headers,
-                json=payload,
-            )
-            print(f"VoltxSMS getnum Response [{response.status_code}]: {response.text}")
-            if response.status_code != 200:
-                return {"meta": {"code": response.status_code, "status": "error"}}
-            return response.json()
-        except Exception as e:
-            print(f"VoltxSMS getnum Exception: {e}")
-            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
-
-    async def get_success_otp(self) -> dict:
-        try:
-            response = await self.client.get(
-                f"{self.base_url}/success-otp",
-                headers=self.headers,
-            )
-            if response.status_code != 200:
-                logging.warning(f"[voltxsms success-otp] HTTP {response.status_code}: {response.text[:200]}")
-                return {"meta": {"code": response.status_code, "status": "error"}}
-            return response.json()
-        except Exception as e:
-            logging.error(f"[voltxsms success-otp] Request error: {e}")
-            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
-
-    async def get_console(self) -> dict:
-        try:
-            response = await self.client.get(
-                f"{self.base_url}/console",
-                headers=self.headers,
-            )
-            if response.status_code != 200:
-                logging.warning(f"[voltxsms console] HTTP {response.status_code}: {response.text[:200]}")
-                return {"meta": {"code": response.status_code, "status": "error"}}
-            return response.json()
-        except Exception as e:
-            logging.error(f"[voltxsms console] Request error: {e}")
-            return {"meta": {"code": -500, "status": "error", "error": str(e)}}
-
-
 zebrasms_client = ZebraSMSClient(ZEBRASMS_API_KEY) if ZEBRASMS_API_KEY else None
 mknetwork_client = MKNetworkClient(MKNETWORK_API_KEY) if MKNETWORK_API_KEY else None
-voltxsms_client = VoltxSMSClient(VOLTXSMS_API_KEY, VOLTXSMS_BASE_URL) if VOLTXSMS_API_KEY else None
 
 
 async def _build_live_and_managed_ranges() -> list:
     """
-    Combines saved DB/fallback ranges with live ranges from ZebraSMS, MK Network v3, and VoltxSMS:
+    Combines saved DB/fallback ranges with live ranges from ZebraSMS and MK Network v3:
     - Keeps both DB managed ranges and live auto-ranges without DB ranges starving live slots.
     - Retains last known live rows if a single API poll fails or returns empty.
     - Keeps exact sender casing (does not combine 'FACEBOOK' and 'Facebook').
@@ -1282,62 +1190,9 @@ async def _build_live_and_managed_ranges() -> list:
                 ):
                     live_added += 1
 
-    # 4. Fetch live ranges from VoltxSMS (/liveaccess -> data.services[].ranges)
-    voltx_services = list(_liveaccess_cache.get("voltx_live_services") or [])
-    if voltxsms_client:
-        vx_res = await voltxsms_client.get_live_access()
-        if isinstance(vx_res, dict) and vx_res.get("meta", {}).get("code") == 200:
-            raw_vx_data = vx_res.get("data", {})
-            if isinstance(raw_vx_data, dict):
-                fetched_vx = raw_vx_data.get("services") or raw_vx_data.get("rows") or []
-            elif isinstance(raw_vx_data, list):
-                fetched_vx = raw_vx_data
-            else:
-                fetched_vx = []
-            if fetched_vx:
-                voltx_services = fetched_vx
-                _liveaccess_cache["voltx_live_services"] = fetched_vx
-            elif voltx_services:
-                logging.warning("[voltxsms liveaccess] Empty services returned; preserving previous Voltx live ranges.")
-        elif voltx_services:
-            logging.warning("[voltxsms liveaccess] API error/rate-limit; preserving previous Voltx live ranges.")
-
-    for svc_item in voltx_services:
-        if not isinstance(svc_item, dict):
-            continue
-        srv = (svc_item.get("sid") or svc_item.get("sender") or svc_item.get("service") or "").strip()
-        country = (svc_item.get("country") or "").strip()
-        rng_list = svc_item.get("ranges") or svc_item.get("rangas") or []
-        if isinstance(rng_list, list) and rng_list:
-            for rng in rng_list:
-                if srv and is_allowed_social_sender(srv):
-                    if add_range_entry(
-                        srv=srv,
-                        rng=str(rng),
-                        country=country,
-                        flag="",
-                        provider="voltxsms",
-                        from_db=False,
-                        enforce_cap=True,
-                    ):
-                        live_added += 1
-        else:
-            rng_single = str(svc_item.get("range") or svc_item.get("rid") or "").strip()
-            if srv and rng_single and is_allowed_social_sender(srv):
-                if add_range_entry(
-                    srv=srv,
-                    rng=rng_single,
-                    country=country,
-                    flag="",
-                    provider="voltxsms",
-                    from_db=False,
-                    enforce_cap=True,
-                ):
-                    live_added += 1
-
     logging.info(
         f"[ranges] zebra_rows={len(zebra_live_rows)}, mk_items={len(mk_items)}, "
-        f"voltx_services={len(voltx_services)}, db_rows={len(managed_rows)}, live_added={live_added}"
+        f"db_rows={len(managed_rows)}, live_added={live_added}"
     )
 
     combined = []
@@ -1599,7 +1454,6 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     )
 
-
 async def forward_otp_to_groups(
     app,
     target_number: str,
@@ -1763,7 +1617,7 @@ async def dispatch_otp(app, allocation_info, target_number, otp_code, sender, ms
     await otp_dispatch_queue.put((allocation_info, target_number, otp_code, sender, msg_text))
 
 
-# --- Global Checker Loops polling ZebraSMS, MK Network v3, and VoltxSMS ---
+# --- Global Checker Loops polling ZebraSMS and MK Network v3 ---
 async def global_zebrasms_poller(app):
     """Polls ZebraSMS /publicapi/getupdate endpoint and dispatches messages to matching active allocations."""
     while True:
@@ -1853,63 +1707,6 @@ async def global_mknetwork_poller(app):
         await asyncio.sleep(3.5)
 
 
-async def global_voltxsms_poller(app):
-    """Polls VoltxSMS /success-otp endpoint and dispatches OTPs matching active VoltxSMS allocations."""
-    while True:
-        try:
-            if voltxsms_client and active_allocations:
-                vx_entries = [
-                    (alloc_key, info)
-                    for alloc_key, info in list(active_allocations.items())
-                    if info.get("provider") == "voltxsms"
-                ]
-                if vx_entries:
-                    res = await voltxsms_client.get_success_otp()
-                    if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
-                        raw_data = res.get("data", {})
-                        otps = raw_data.get("otps", []) if isinstance(raw_data, dict) else []
-                        if isinstance(otps, dict):
-                            otps = [otps]
-                        for item in (otps or []):
-                            if not isinstance(item, dict):
-                                continue
-                            otp_id = str(item.get("otp_id") or "")
-                            raw_num = str(item.get("number") or item.get("full_number") or "")
-                            msg_text = str(item.get("message") or "")
-                            otp_code = extract_code(msg_text)
-
-                            dedupe_key = otp_id or f"{raw_num}_{otp_code}_{msg_text}_{item.get('time', '')}"
-                            if len(seen_voltx_otp_ids) > MAX_SEEN_SIZE:
-                                seen_voltx_otp_ids.clear()
-                            if dedupe_key in seen_voltx_otp_ids:
-                                continue
-
-                            norm_incoming = re.sub(r"\D", "", raw_num)
-                            matched_any = False
-                            for alloc_key, info in list(active_allocations.items()):
-                                if info.get("provider") != "voltxsms":
-                                    continue
-                                alloc_num = str(info.get("number") or "")
-                                norm_alloc = re.sub(r"\D", "", alloc_num)
-                                if norm_alloc and norm_incoming and (
-                                    norm_alloc == norm_incoming
-                                    or norm_incoming.endswith(norm_alloc)
-                                    or norm_alloc.endswith(norm_incoming)
-                                ):
-                                    target_num = alloc_num or (f"+{norm_incoming}" if norm_incoming else raw_num)
-                                    sender_val = str(item.get("sender") or item.get("sid") or info.get("service") or "VoltxSMS")
-                                    await dispatch_otp(app, info, target_num, otp_code, sender_val, msg_text)
-                                    active_allocations.pop(alloc_key, None)
-                                    matched_any = True
-
-                            if matched_any:
-                                seen_voltx_otp_ids.add(dedupe_key)
-        except Exception as e:
-            logging.error(f"Error in VoltxSMS global poller: {e}")
-
-        await asyncio.sleep(3.0)
-
-
 async def fake_sms_generator_loop(app):
     while True:
         try:
@@ -1995,14 +1792,6 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
-def _get_provider_label(prov: str) -> str:
-    if prov == "mknetwork":
-        return "MK Network"
-    if prov == "voltxsms":
-        return "VoltxSMS"
-    return "ZebraSMS"
-
-
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["waiting_for_range"] = None
     context.user_data["waiting_for_broadcast"] = False
@@ -2017,12 +1806,9 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🌐 MK Network", callback_data="admin_prov_mknetwork"),
         ],
         [
-            InlineKeyboardButton("⚡ VoltxSMS", callback_data="admin_prov_voltxsms"),
             InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
-        ],
-        [
             InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
-        ],
+        ]
     ]
 
     fake_status = "🟢 ON" if fake_otp_settings["enabled"] else "🔴 OFF"
@@ -2045,7 +1831,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if data.startswith("admin_prov_"):
         prov = data.replace("admin_prov_", "")
-        prov_label = _get_provider_label(prov)
+        prov_label = "MK Network" if prov == "mknetwork" else "ZebraSMS"
         context.user_data["admin_provider"] = prov
         managed_ranges = await asyncio.to_thread(db_get_managed_ranges, prov)
 
@@ -2080,12 +1866,9 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 InlineKeyboardButton("🌐 MK Network", callback_data="admin_prov_mknetwork"),
             ],
             [
-                InlineKeyboardButton("⚡ VoltxSMS", callback_data="admin_prov_voltxsms"),
                 InlineKeyboardButton("🧪 Toggle Fake SMS 🟠", callback_data="admin_toggle_fake"),
-            ],
-            [
                 InlineKeyboardButton("📢 Broadcast Msg 🔵", callback_data="admin_broadcast"),
-            ],
+            ]
         ]
         fake_status = "🟢 ON" if fake_otp_settings["enabled"] else "🔴 OFF"
         admin_msg = (
@@ -2098,7 +1881,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif data.startswith("admin_add_"):
         prov = data.replace("admin_add_", "")
-        prov_label = _get_provider_label(prov)
+        prov_label = "MK Network" if prov == "mknetwork" else "ZebraSMS"
         context.user_data["waiting_for_range"] = prov
         context.user_data["waiting_for_broadcast"] = False
         await query.message.reply_text(
@@ -2154,29 +1937,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _allocate_single_provider_number(provider: str, range_val: str) -> tuple[str, str, str | None, int | None] | None:
-    """Requests one number from ZebraSMS, MK Network v3, or VoltxSMS and normalizes the result."""
-    if provider == "voltxsms" and voltxsms_client:
-        res = await voltxsms_client.get_number(range_val=range_val)
-        if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
-            row = res.get("data")
-            if isinstance(row, list) and row:
-                row = row[0]
-            if isinstance(row, dict):
-                num_val = (
-                    row.get("full_number")
-                    or row.get("number")
-                    or (f"+{row['no_plus_number']}" if row.get("no_plus_number") else None)
-                )
-                country_val = row.get("country")
-                if num_val:
-                    num_str = str(num_val).strip()
-                    digits_only = re.sub(r"\D", "", num_str)
-                    if not num_str.startswith("+") and digits_only.isdigit():
-                        num_str = f"+{digits_only}"
-                    alloc_key = f"vx_{digits_only or num_str}"
-                    return alloc_key, num_str, country_val, None
-        return None
-
+    """Requests one number from ZebraSMS or MK Network v3 and normalizes the result."""
     if provider == "mknetwork" and mknetwork_client:
         res = await mknetwork_client.get_number(range_val=range_val)
         if isinstance(res, dict) and res.get("meta", {}).get("code") == 200:
@@ -2583,7 +2344,6 @@ async def _start_background_workers(application) -> None:
     application.create_task(dispatch_consumer_loop(application))
     application.create_task(global_zebrasms_poller(application))
     application.create_task(global_mknetwork_poller(application))
-    application.create_task(global_voltxsms_poller(application))
     application.create_task(fake_sms_generator_loop(application))
     application.create_task(liveaccess_auto_refresh_loop())
 
@@ -2612,5 +2372,5 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.StatusUpdate.ALL, handle_group_chat_tracking))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_text_messages))
 
-    print("🤖 Bot running with high-concurrency ZebraSMS + MK Network v3 + VoltxSMS integration...")
+    print("🤖 Bot running with high-concurrency ZebraSMS + MK Network v3 integration...")
     app.run_polling(drop_pending_updates=True)
