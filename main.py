@@ -1393,6 +1393,74 @@ async def cmd_test_sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Failed to send to Channel: `{err}`", parse_mode="Markdown")
 
 
+async def forward_otp_to_groups(
+    app,
+    target_number: str,
+    country_name: str,
+    flag_icon: str,
+    sender: str,
+    otp_code: str,
+    msg_text: str,
+):
+    """Forwards received OTPs to tracked/configured groups in a clean table-like monospace layout matching the screenshot."""
+    group_chats: list[int] = []
+    seen_groups: set[int] = set()
+
+    for gid in await asyncio.to_thread(db_get_all_groups):
+        if gid and gid not in seen_groups:
+            group_chats.append(gid)
+            seen_groups.add(gid)
+
+    if not group_chats:
+        return
+
+    masked_num = mask_phone_number(target_number)
+    sender_label = (sender or "OTP").strip()
+    country_label = (country_name or "Unknown").strip()
+    flag_label = (flag_icon or "🌐").strip()
+    code_label = str(otp_code or "").strip()
+    sms_body = (msg_text or "").strip()
+
+    # Align labels & values in a monospace table block so it renders cleanly on mobile Telegram
+    col1_w = 8
+    table_lines = [
+        f"» {'NUMBER':<{col1_w}} | {masked_num}",
+        f"🌐 {'COUNTRY':<{col1_w}} | {flag_label} {country_label}",
+        f"❤ {'CODE':<{col1_w}} | {code_label}",
+    ]
+    table_block = "\n".join(table_lines)
+
+    group_text = (
+        f"⚡ *{sender_label} • OTP • RCV* ⚡\n"
+        f"```text\n{table_block}\n```\n"
+        f"✅ `📋 {sms_body}`"
+    )
+
+    bot_username = await get_cached_bot_username(app.bot)
+    buttons_row_1 = []
+    if CHANNEL_URL and CHANNEL_URL != "https://t.me/":
+        buttons_row_1.append(InlineKeyboardButton("↗ CHANNEL", url=CHANNEL_URL))
+    if bot_username:
+        buttons_row_1.append(InlineKeyboardButton("↗ NUMBER", url=f"https://t.me/{bot_username}"))
+
+    keyboard_rows = []
+    if buttons_row_1:
+        keyboard_rows.append(buttons_row_1)
+    keyboard_rows.append([
+        InlineKeyboardButton(f"📋 Copy OTP: {code_label}", copy_text=CopyTextButton(text=code_label))
+    ])
+    group_keyboard = InlineKeyboardMarkup(keyboard_rows)
+
+    for gid in group_chats:
+        await _safe_send_broadcast_message(
+            bot=app.bot,
+            chat_id=gid,
+            text=group_text,
+            reply_markup=group_keyboard,
+        )
+        await asyncio.sleep(0.04)
+
+
 # --- Non-Blocking Dispatch Consumer Queue ---
 async def dispatch_consumer_loop(app):
     """Permanently drains the queue and sends messages instantly."""
@@ -1442,6 +1510,18 @@ async def dispatch_consumer_loop(app):
                     await app.bot.send_message(chat_id=CHANNEL_CHAT_ID, text=channel_text, parse_mode="Markdown", reply_markup=channel_keyboard)
                 except Exception as err:
                     logging.error(f"Failed to post to channel: {err}")
+
+            asyncio.create_task(
+                forward_otp_to_groups(
+                    app=app,
+                    target_number=target_number,
+                    country_name=country_name,
+                    flag_icon=flag_icon,
+                    sender=sender,
+                    otp_code=otp_code,
+                    msg_text=msg_text,
+                )
+            )
 
             asyncio.create_task(
                 maybe_broadcast_db_range_country_alert(
